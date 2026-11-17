@@ -18,7 +18,7 @@ service cloud.firestore {
     }
 
     function ownerEmails() {
-      return ['owner@malaroyale.com'];
+      return ['allinoneaideveloper2026@gmail.com'];
     }
 
     function isDeveloper() {
