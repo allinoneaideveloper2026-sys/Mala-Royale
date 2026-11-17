@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Staff emails match firestore.rules
+        run: npm run check:config
+        env:
+          VITE_OWNER_EMAILS: ${{ vars.VITE_OWNER_EMAILS }}
+          VITE_DEVELOPER_EMAILS: ${{ vars.VITE_DEVELOPER_EMAILS }}
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
