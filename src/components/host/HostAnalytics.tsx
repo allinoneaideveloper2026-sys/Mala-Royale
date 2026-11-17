@@ -9,6 +9,32 @@ export interface HostAnalyticsProps {
   /** Learned importance of each kind of advice, moved by the thumbs up / down below. */
   weights: Record<string, number>;
   onFeedback: (insightKey: string, useful: boolean) => void;
+  /** Only the developer login sees the reset button. */
+  isDeveloper?: boolean;
+  onReset?: () => Promise<void> | void;
+}
+
+type RangeKey = '7' | '30' | '90' | '365' | 'ALL' | 'CUSTOM';
+
+const RANGE_OPTIONS: Array<[RangeKey, string]> = [
+  ['7', 'Last 7 days'],
+  ['30', 'Last 30 days'],
+  ['90', 'Last 90 days'],
+  ['365', 'Last 12 months'],
+  ['ALL', 'All time'],
+  ['CUSTOM', 'Custom dates'],
+];
+
+function resolveRange(key: RangeKey, customFrom: string, customTo: string): { from: number; to: number; label: string } {
+  const now = Date.now();
+  if (key === 'ALL') return { from: 0, to: now, label: 'all time' };
+  if (key === 'CUSTOM') {
+    const from = customFrom ? new Date(`${customFrom}T00:00:00`).getTime() : 0;
+    const to = customTo ? new Date(`${customTo}T23:59:59.999`).getTime() : now;
+    return { from: Number.isFinite(from) ? from : 0, to: Number.isFinite(to) ? to : now, label: 'selected dates' };
+  }
+  const days = Number(key);
+  return { from: now - days * 24 * 60 * 60 * 1000, to: now, label: key === '365' ? '12 months' : `${days} days` };
 }
 
 interface ChatTurn {
@@ -35,16 +61,29 @@ const cardStyle: React.CSSProperties = { backgroundColor: '#fff', border: '1px s
 /** Optional: a server-side proxy to a language model. The retrieved facts are sent as context. */
 const AI_PROXY_URL: string = (import.meta.env.VITE_AI_PROXY_URL as string | undefined) || '';
 
-export default function HostAnalytics({ orders, products, enquiries, weights, onFeedback }: HostAnalyticsProps) {
+export default function HostAnalytics({ orders, products, enquiries, weights, onFeedback, isDeveloper = false, onReset }: HostAnalyticsProps) {
   const [question, setQuestion] = useState('');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [thinking, setThinking] = useState(false);
   const [voted, setVoted] = useState<Record<string, boolean>>({});
 
-  const snapshot: DataSnapshot = useMemo(
-    () => ({ orders, products, enquiries, now: Date.now() }),
-    [orders, products, enquiries],
-  );
+  const [rangeKey, setRangeKey] = useState<RangeKey>('30');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const range = useMemo(() => resolveRange(rangeKey, customFrom, customTo), [rangeKey, customFrom, customTo]);
+
+  const snapshot: DataSnapshot = useMemo(() => {
+    const inRange = (isoDate: string) => {
+      const at = Date.parse(isoDate) || 0;
+      return at >= range.from && at <= range.to;
+    };
+    return {
+      orders: orders.filter(order => inRange(order.createdAt)),
+      products,
+      enquiries: enquiries.filter(enquiry => inRange(enquiry.createdAt)),
+      now: range.to,
+    };
+  }, [orders, products, enquiries, range]);
   const metrics = useMemo(() => computeMetrics(snapshot), [snapshot]);
   const insights = useMemo(() => generateInsights(snapshot, weights).slice(0, 8), [snapshot, weights]);
 
@@ -59,7 +98,7 @@ export default function HostAnalytics({ orders, products, enquiries, weights, on
     setQuestion('');
     setThinking(true);
 
-    const local = answerQuestion(text, { ...snapshot, now: Date.now() }, weights);
+    const local = answerQuestion(text, snapshot, weights);
     let reply = local.text;
     if (AI_PROXY_URL) {
       try {
@@ -87,8 +126,8 @@ export default function HostAnalytics({ orders, products, enquiries, weights, on
   };
 
   const stats: Array<[string, string]> = [
-    ['Revenue (30 days)', inr(metrics.revenue30)],
-    ['Orders (30 days)', String(metrics.orders30)],
+    [`Revenue (${range.label})`, inr(metrics.revenue)],
+    [`Orders (${range.label})`, String(metrics.salesCount)],
     ['Average order', inr(metrics.aov)],
     ['Awaiting payment check', String(metrics.pendingCount)],
     ['Discounts given', inr(metrics.discount)],
@@ -103,6 +142,25 @@ export default function HostAnalytics({ orders, products, enquiries, weights, on
           Built from your own orders, products and enquiries. It re-reads everything each time you open it, so it gets sharper as your history grows.
           {AI_PROXY_URL ? ' Answers are written by a connected language model using your data as context.' : ' Answers come from the built-in analyst; no data leaves your account.'}
         </p>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
+        <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }} htmlFor="insights-range">Period</label>
+        <select id="insights-range" value={rangeKey} onChange={event => setRangeKey(event.target.value as RangeKey)} style={{ padding: '0.4rem' }}>
+          {RANGE_OPTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select>
+        {rangeKey === 'CUSTOM' && (
+          <>
+            <input type="date" aria-label="From date" value={customFrom} max={customTo || undefined} onChange={event => setCustomFrom(event.target.value)} style={{ padding: '0.35rem' }} />
+            <span style={{ fontSize: '0.85rem' }}>to</span>
+            <input type="date" aria-label="To date" value={customTo} min={customFrom || undefined} onChange={event => setCustomTo(event.target.value)} style={{ padding: '0.35rem' }} />
+          </>
+        )}
+        {isDeveloper && onReset && (
+          <button type="button" onClick={() => void onReset()} style={{ marginLeft: 'auto', backgroundColor: '#fff', color: '#8b1e2d', border: '1px solid #8b1e2d', borderRadius: '4px', padding: '0.4rem 0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>
+            Reset AI learning (developer only)
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.7rem' }}>

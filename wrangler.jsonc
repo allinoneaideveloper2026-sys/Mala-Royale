@@ -1,4 +1,5 @@
 {
+  // Cloudflare static hosting config. The site is the built files in ./dist.
   "name": "mala-royale-optimized",
   "compatibility_date": "2026-11-01",
   "assets": {

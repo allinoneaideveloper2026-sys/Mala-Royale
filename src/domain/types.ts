@@ -9,6 +9,20 @@ export type OrderStage =
   | 'NOT_ACCEPTED'
   | 'CANCELLED';
 
+export interface ProofCheckResult {
+  utrSource: 'auto' | 'edited' | 'manual';
+  amountFound: boolean | null;
+  /** Payment time read from the screenshot (ISO), when it could be read. */
+  paidAt?: string;
+  timeStatus?: 'fresh' | 'stale' | 'future' | 'unknown';
+}
+
+export interface RefundDetails {
+  method: 'UPI_ID' | 'UPI_PHONE';
+  value: string;
+  submittedAt: string;
+}
+
 export type UserRole = 'DEVELOPER' | 'OWNER' | 'CUSTOMER';
 
 export interface ProductMedia {
@@ -92,6 +106,8 @@ export interface PaymentRecord {
   screenshotUrl: string;
   verified: boolean;
   submittedAt?: string;
+  /** What the automatic screenshot reading found (a hint for the host, not proof of payment). */
+  proofCheck?: ProofCheckResult;
 }
 
 export interface CourierBill {
@@ -121,6 +137,15 @@ export interface Order {
   deliveryComments?: string;
   rejectionReason?: string;
   rejectionNote?: string;
+  /** Why the host put this order on hold (shown to the customer). */
+  holdReason?: string;
+  holdNote?: string;
+  heldAt?: string;
+  heldBy?: string;
+  /** True when stock was already blocked at the moment the order was placed. */
+  stockReserved?: boolean;
+  /** Where to send the refund after the host cancels (not accepts) the order. */
+  refundDetails?: RefundDetails;
   hostMessage?: string;
   hostMessageAt?: string;
   createdAt: string;
@@ -135,6 +160,10 @@ export interface Enquiry {
   message: string;
   productId?: string;
   productName?: string;
+  /** Set when the customer reports a problem with a payment on one of their orders. */
+  kind?: 'PAYMENT_ISSUE';
+  orderId?: string;
+  issueType?: string;
   status: 'NEW' | 'REPLIED';
   createdAt: string;
 }

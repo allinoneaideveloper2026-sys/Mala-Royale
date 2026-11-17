@@ -26,5 +26,7 @@ export const CONFIG = {
   cloudinary: {
     cloudName: import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || '',
     uploadPreset: import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || '',
+    // Optional separate preset for customer payment screenshots (falls back to the product preset).
+    proofPreset: import.meta.env.VITE_CLOUDINARY_PROOF_PRESET || '',
   },
 };

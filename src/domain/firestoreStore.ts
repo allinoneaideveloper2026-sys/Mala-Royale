@@ -17,8 +17,12 @@ import {
 } from 'firebase/firestore';
 import { CONFIG } from '../config';
 import { loadWithCache, writeCache } from './cache';
+import { validateRefundDetails } from './refund';
+import { isValidUpiId } from './upi';
+import { isValidUtr, validateProofFile } from './paymentProof';
+import { compressImage } from '../app/imageCompress';
 import { firestore } from '../firebase';
-import { CourierBill, CustomerAddress, Enquiry, Feedback, FeedbackSentiment, Order, ParcelDetails, PaymentRecord, PincodeCheck, Product, ProductMedia, ProductStatus, SavedDeliveryAddress } from './types';
+import { CourierBill, CustomerAddress, Enquiry, Feedback, FeedbackSentiment, Order, ParcelDetails, PaymentRecord, PincodeCheck, Product, ProductMedia, ProofCheckResult, ProductStatus, SavedDeliveryAddress } from './types';
 
 function requireFirestore(): Firestore {
   if (!firestore) throw new Error('Firebase is not configured. Add the VITE_FIREBASE_* settings first.');
@@ -34,8 +38,9 @@ interface CloudinaryUploadResponse {
   error?: { message?: unknown };
 }
 
-async function uploadToCloudinary(file: File, resourceType: 'image' | 'video'): Promise<string> {
-  const { cloudName, uploadPreset } = CONFIG.cloudinary;
+async function uploadToCloudinary(file: File, resourceType: 'image' | 'video', presetOverride = ''): Promise<string> {
+  const { cloudName } = CONFIG.cloudinary;
+  const uploadPreset = presetOverride || CONFIG.cloudinary.uploadPreset;
   if (!cloudName || !uploadPreset) {
     throw new Error('Cloudinary is not configured. Add VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET.');
   }
@@ -153,16 +158,30 @@ export async function uploadProductMedia(files: File[]): Promise<ProductMedia[]>
   }));
 }
 
+export interface UpiSettings {
+  upiId: string;
+  payeeName: string;
+}
+
+interface CheckoutSettings extends UpiSettings {
+  url: string;
+  updatedAt?: string;
+}
+
+const readCheckoutSettings = (data: Record<string, unknown> | undefined): CheckoutSettings => ({
+  url: data ? String(data.paymentQrUrl || '') : '',
+  updatedAt: data && typeof data.updatedAt === 'string' ? data.updatedAt : undefined,
+  upiId: data ? String(data.upiId || '') : '',
+  payeeName: data ? String(data.payeeName || '') : '',
+});
+
 export function subscribeCheckoutQr(
-  onChange: (url: string, updatedAt?: string) => void,
+  onChange: (url: string, updatedAt: string | undefined, upi: UpiSettings) => void,
   onError: (error: Error) => void,
   options: { live?: boolean } = {},
 ) {
   const db = requireFirestore();
-  const read = (data: Record<string, unknown> | undefined) => ({
-    url: data ? String(data.paymentQrUrl || '') : '',
-    updatedAt: data && typeof data.updatedAt === 'string' ? data.updatedAt : undefined,
-  });
+  const read = readCheckoutSettings;
   if (!options.live) {
     return loadWithCache({
       key: 'settings-checkout',
@@ -171,14 +190,14 @@ export function subscribeCheckoutQr(
         const snapshot = await getDoc(doc(db, 'settings', 'checkout'));
         return read(snapshot.exists() ? snapshot.data() : undefined);
       },
-      onChange: value => onChange(value.url, value.updatedAt),
+      onChange: value => onChange(value.url, value.updatedAt, { upiId: value.upiId || '', payeeName: value.payeeName || '' }),
       onError,
     });
   }
   return onSnapshot(doc(db, 'settings', 'checkout'), snapshot => {
     const value = read(snapshot.exists() ? snapshot.data() : undefined);
     writeCache('settings-checkout', value);
-    onChange(value.url, value.updatedAt);
+    onChange(value.url, value.updatedAt, { upiId: value.upiId, payeeName: value.payeeName });
   }, onError);
 }
 
@@ -186,16 +205,30 @@ export function subscribeCheckoutQr(
  * Reads the payment QR straight from Firestore (1 read), bypassing the browser cache.
  * Called when a customer is about to pay so they never see an outdated QR.
  */
-export async function fetchCheckoutQrFresh(): Promise<{ url: string; updatedAt?: string }> {
+export async function fetchCheckoutQrFresh(): Promise<CheckoutSettings> {
   const db = requireFirestore();
   const snapshot = await getDoc(doc(db, 'settings', 'checkout'));
-  const data = snapshot.exists() ? snapshot.data() : undefined;
-  const value = {
-    url: data ? String(data.paymentQrUrl || '') : '',
-    updatedAt: data && typeof data.updatedAt === 'string' ? data.updatedAt : undefined,
-  };
+  const value = readCheckoutSettings(snapshot.exists() ? snapshot.data() : undefined);
   writeCache('settings-checkout', value);
   return value;
+}
+
+// The shop's UPI ID lets checkout make a QR for the exact amount of each order.
+export async function saveUpiSettings(upiId: string, payeeName: string): Promise<void> {
+  const db = requireFirestore();
+  const cleanId = upiId.trim();
+  const cleanName = payeeName.trim();
+  if (cleanId && !isValidUpiId(cleanId)) throw new Error('Enter a valid UPI ID, for example yourname@bank.');
+  if (cleanId && (!cleanName || cleanName.length > 60)) throw new Error('Enter the name shown on your UPI account (up to 60 characters).');
+  await setDoc(doc(db, 'settings', 'checkout'), { upiId: cleanId, payeeName: cleanName, updatedAt: new Date().toISOString() }, { merge: true });
+}
+
+// Customer payment screenshot (PhonePe, GPay, ...). Shrunk first, then uploaded; the link is kept on the order.
+export async function uploadPaymentProof(file: File): Promise<string> {
+  const problem = validateProofFile(file);
+  if (problem) throw new Error(problem);
+  const smaller = await compressImage(file);
+  return uploadToCloudinary(smaller, 'image', CONFIG.cloudinary.proofPreset);
 }
 
 export async function uploadCheckoutQr(file: File): Promise<string> {
@@ -257,22 +290,28 @@ export async function createCloudOrder(
   address: CustomerAddress,
   courierNoticeAccepted: boolean,
   utr: string,
+  screenshotUrl = '',
+  proofFingerprint = '',
+  proofCheck?: ProofCheckResult,
 ): Promise<Order> {
   const db = requireFirestore();
   if (!courierNoticeAccepted) throw new Error('Courier charge notice must be accepted prior to order placement.');
+  if (!isValidUtr(utr)) throw new Error('Enter the 12-digit UTR shown in your payment app.');
 
   const orderId = `MR-${createId()}`;
   const orderRef = doc(db, 'orders', orderId);
   const referenceId = await hashPaymentReference(utr);
   const paymentRef = doc(db, 'paymentReferences', referenceId);
+  const proofRef = proofFingerprint ? doc(db, 'paymentReferences', await hashPaymentReference(`proof:${proofFingerprint}`)) : null;
   const now = new Date().toISOString();
   const itemPayment: PaymentRecord = {
     paymentId: `PAY-${createId()}`,
     kind: 'ITEM',
     amount: itemTotal,
-    utr,
-    screenshotUrl: 'uploaded_proof.png',
+    utr: utr.trim(),
+    screenshotUrl,
     verified: false,
+    ...(proofCheck ? { proofCheck } : {}),
   };
   const order: Order = {
     orderId,
@@ -288,14 +327,42 @@ export async function createCloudOrder(
     updatedAt: now,
   };
 
+  // Stock is blocked the moment the order is placed, so two customers can never buy the last piece.
+  const stockEntries = totalsByProduct(items);
   await runTransaction(db, async transaction => {
     const existingReference = await transaction.get(paymentRef);
     if (existingReference.exists()) throw new Error('UTR has already been submitted for another order.');
-    transaction.set(orderRef, order);
+    const existingProof = proofRef ? await transaction.get(proofRef) : null;
+    if (existingProof?.exists()) throw new Error('This payment screenshot was already used for another order. Please attach your own payment screenshot.');
+
+    const productSnapshots = await Promise.all(stockEntries.map(([productId]) => transaction.get(doc(db, 'products', productId))));
+    const reservations: Array<{ ref: DocumentReference; quantity: number }> = [];
+    productSnapshots.forEach((productSnapshot, index) => {
+      if (!productSnapshot.exists()) {
+        throw new Error('An item in your cart is no longer available. Please refresh the page and try again.');
+      }
+      const product = productSnapshot.data() as Product;
+      if (product.status === 'COMING_SOON' || product.status === 'OUT_OF_STOCK') {
+        throw new Error(`"${product.name}" is not available right now. Please remove it from your cart.`);
+      }
+      if (typeof product.quantity !== 'number') return;
+      const requested = stockEntries[index][1];
+      if (product.quantity < requested) {
+        throw new Error(product.quantity > 0
+          ? `Only ${product.quantity} left of "${product.name}". Please lower the quantity in your cart.`
+          : `"${product.name}" has just sold out. Please remove it from your cart.`);
+      }
+      reservations.push({ ref: productSnapshot.ref, quantity: product.quantity - requested });
+    });
+
+    transaction.set(orderRef, { ...order, stockReserved: true });
     transaction.set(paymentRef, { userId, orderId, createdAt: now });
+    if (proofRef) transaction.set(proofRef, { userId, orderId, createdAt: now });
+    // lastReservationOrderId lets the security rules confirm this stock change belongs to a brand-new order.
+    reservations.forEach(update => transaction.update(update.ref, { quantity: update.quantity, lastReservationOrderId: orderId }));
   });
 
-  return order;
+  return { ...order, stockReserved: true };
 }
 
 function totalsByProduct(items: Order['items']): Array<[string, number]> {
@@ -311,6 +378,7 @@ export async function verifyCloudPayment(orderId: string, kind: 'ITEM' | 'COURIE
     const snapshot = await transaction.get(orderRef);
     if (!snapshot.exists()) throw new Error('Order not found.');
     const order = snapshot.data() as Order;
+    if (order.isWithheld) throw new Error(HOLD_MESSAGE);
     if (kind === 'ITEM' && !order.deliveryConfirmed) {
       throw new Error('Host must confirm the delivery address before confirming payment.');
     }
@@ -318,9 +386,9 @@ export async function verifyCloudPayment(orderId: string, kind: 'ITEM' | 'COURIE
     if (!order[paymentField]) return;
     if (order[paymentField]?.verified) return;
 
-    // Confirming the item payment is the point where stock is reduced.
+    // New orders already blocked their stock when they were placed. Older orders are reduced here, as before.
     const stockUpdates: Array<{ ref: DocumentReference; quantity: number }> = [];
-    if (kind === 'ITEM') {
+    if (kind === 'ITEM' && !order.stockReserved) {
       const entries = totalsByProduct(order.items);
       const productSnapshots = await Promise.all(entries.map(([productId]) => transaction.get(doc(db, 'products', productId))));
       productSnapshots.forEach((productSnapshot, index) => {
@@ -355,13 +423,14 @@ export async function attachCloudCourierBill(orderId: string, bill: Omit<Courier
   });
 }
 
-export async function submitCloudCourierPayment(orderId: string, userId: string, utr: string): Promise<void> {
+export async function submitCloudCourierPayment(orderId: string, userId: string, utr: string, screenshotUrl = '', proofFingerprint = ''): Promise<void> {
   const db = requireFirestore();
   const normalizedUtr = utr.trim();
   if (!/^\d{12}$/.test(normalizedUtr)) throw new Error('Enter the 12-digit courier payment UTR.');
   const orderRef = doc(db, 'orders', orderId);
   const referenceId = await hashPaymentReference(normalizedUtr);
   const paymentRef = doc(db, 'paymentReferences', referenceId);
+  const proofRef = proofFingerprint ? doc(db, 'paymentReferences', await hashPaymentReference(`proof:${proofFingerprint}`)) : null;
   const now = new Date().toISOString();
 
   await runTransaction(db, async transaction => {
@@ -371,6 +440,8 @@ export async function submitCloudCourierPayment(orderId: string, userId: string,
     ]);
     if (!orderSnapshot.exists()) throw new Error('Order not found.');
     if (referenceSnapshot.exists()) throw new Error('UTR has already been submitted for another payment.');
+    const proofSnapshot = proofRef ? await transaction.get(proofRef) : null;
+    if (proofSnapshot?.exists()) throw new Error('This payment screenshot was already used for another payment. Please attach your own payment screenshot.');
     const order = orderSnapshot.data() as Order;
     if (order.userId !== userId) throw new Error('This order does not belong to your account.');
     if (!order.courierBill) throw new Error('The host has not added a courier charge yet.');
@@ -381,13 +452,34 @@ export async function submitCloudCourierPayment(orderId: string, userId: string,
       kind: 'COURIER',
       amount: order.courierBill.amount,
       utr: normalizedUtr,
-      screenshotUrl: '',
+      screenshotUrl,
       verified: false,
       submittedAt: now,
     };
     transaction.update(orderRef, { courierPayment: payment, updatedAt: now });
     transaction.set(paymentRef, { userId, orderId, createdAt: now });
+    if (proofRef) transaction.set(proofRef, { userId, orderId, createdAt: now });
   });
+}
+
+const HOLD_MESSAGE = 'This order is on hold. Release the hold first.';
+
+export async function holdCloudOrder(orderId: string, email: string, reason: string, note: string): Promise<void> {
+  const db = requireFirestore();
+  const orderRef = doc(db, 'orders', orderId);
+  await runTransaction(db, async transaction => {
+    const snapshot = await transaction.get(orderRef);
+    if (!snapshot.exists()) throw new Error('Order not found.');
+    const order = snapshot.data() as Order;
+    if (['NOT_ACCEPTED', 'CANCELLED', 'DELIVERED', 'SUBMITTED_FOR_DISPATCH'].includes(order.stage)) throw new Error('This order can no longer be put on hold.');
+    const now = new Date().toISOString();
+    transaction.update(orderRef, { isWithheld: true, holdReason: reason.slice(0, 120), holdNote: note.slice(0, 400), heldAt: now, heldBy: email, updatedAt: now });
+  });
+}
+
+export async function releaseCloudOrderHold(orderId: string): Promise<void> {
+  const db = requireFirestore();
+  await updateDoc(doc(db, 'orders', orderId), { isWithheld: false, holdReason: '', holdNote: '', updatedAt: new Date().toISOString() });
 }
 
 export async function submitCloudOrderForDispatch(orderId: string): Promise<void> {
@@ -397,7 +489,7 @@ export async function submitCloudOrderForDispatch(orderId: string): Promise<void
     const snapshot = await transaction.get(orderRef);
     if (!snapshot.exists()) throw new Error('Order not found.');
     const order = snapshot.data() as Order;
-    if (order.isWithheld) throw new Error('Parcel is withheld by host.');
+    if (order.isWithheld) throw new Error(HOLD_MESSAGE);
     if (order.courierBill && !order.courierPayment?.verified) {
       throw new Error('Courier payment must be confirmed before dispatch.');
     }
@@ -414,9 +506,9 @@ export async function markCloudOrderNotAccepted(orderId: string, reason = '', no
     const order = snapshot.data() as Order;
     if (order.stage === 'NOT_ACCEPTED') return;
 
-    // If stock was already reduced when the item payment was confirmed, put it back.
+    // Put the blocked stock back (stock is blocked when the order is placed; older orders when payment was confirmed).
     const restocks: Array<{ ref: DocumentReference; quantity: number }> = [];
-    if (order.itemPayment?.verified) {
+    if (order.stockReserved || order.itemPayment?.verified) {
       const entries = totalsByProduct(order.items);
       const productSnapshots = await Promise.all(entries.map(([productId]) => transaction.get(doc(db, 'products', productId))));
       productSnapshots.forEach((productSnapshot, index) => {
@@ -443,6 +535,7 @@ export async function markCloudOrderDelivered(orderId: string): Promise<void> {
   await runTransaction(db, async transaction => {
     const snapshot = await transaction.get(orderRef);
     if (!snapshot.exists()) throw new Error('Order not found.');
+    if ((snapshot.data() as Order).isWithheld) throw new Error(HOLD_MESSAGE);
     if ((snapshot.data() as Order).stage !== 'SUBMITTED_FOR_DISPATCH') {
       throw new Error('Only dispatched orders can be marked delivered.');
     }
@@ -540,6 +633,7 @@ export async function confirmCloudOrderDelivery(orderId: string, email: string):
   const snapshot = await getDoc(orderRef);
   if (!snapshot.exists()) throw new Error('Order not found.');
   const order = snapshot.data() as Order;
+  if (order.isWithheld) throw new Error(HOLD_MESSAGE);
   if (!order.address.pincodeCheck) throw new Error('Run an online pincode check before confirming delivery.');
   if (['NOT_FOUND', 'NOT_SERVICEABLE'].includes(order.address.pincodeCheck.status)) {
     throw new Error('This pincode is not confirmed as deliverable.');
@@ -566,6 +660,9 @@ export interface EnquiryInput {
   message: string;
   productId?: string;
   productName?: string;
+  kind?: 'PAYMENT_ISSUE';
+  orderId?: string;
+  issueType?: string;
 }
 
 export async function submitEnquiry(userId: string, input: EnquiryInput): Promise<void> {
@@ -586,6 +683,9 @@ export async function submitEnquiry(userId: string, input: EnquiryInput): Promis
     createdAt: new Date().toISOString(),
     ...(input.productId ? { productId: input.productId } : {}),
     ...(input.productName ? { productName: input.productName.slice(0, 120) } : {}),
+    ...(input.kind ? { kind: input.kind } : {}),
+    ...(input.orderId ? { orderId: input.orderId.slice(0, 40) } : {}),
+    ...(input.issueType ? { issueType: input.issueType.slice(0, 80) } : {}),
   };
   await setDoc(doc(db, 'enquiries', `ENQ-${createId()}`), data);
 }
@@ -660,6 +760,38 @@ export function subscribeAiMemory(onChange: (weights: Record<string, number>) =>
     }
     onChange(weights);
   }, onError);
+}
+
+// The customer tells us where to send the refund after the host cancels (does not accept) the order.
+export async function submitRefundDetails(orderId: string, method: 'UPI_ID' | 'UPI_PHONE', value: string): Promise<void> {
+  const problem = validateRefundDetails(method, value);
+  if (problem) throw new Error(problem);
+  const db = requireFirestore();
+  const now = new Date().toISOString();
+  await updateDoc(doc(db, 'orders', orderId), {
+    refundDetails: { method, value: value.trim(), submittedAt: now },
+    updatedAt: now,
+  });
+}
+
+/** Reads the whole catalog straight from Firestore and refreshes the browser copy (used after a stock conflict). */
+export async function refreshProductsFresh(): Promise<Product[]> {
+  const db = requireFirestore();
+  const snapshot = await getDocs(collection(db, 'products'));
+  const products = snapshot.docs.map(item => ({ ...(item.data() as object), id: item.id } as Product));
+  writeCache('products', products);
+  return products;
+}
+
+/** Keeps the customer's browser copy of the catalog in step after their own order changed stock. */
+export function cacheProducts(products: Product[]): void {
+  writeCache('products', products);
+}
+
+// Developer-only: forgets everything the assistant learned from thumbs up / down.
+export async function resetAiMemory(): Promise<void> {
+  const db = requireFirestore();
+  await setDoc(doc(db, 'hostPrivate', 'aiMemory'), { weights: {}, updatedAt: new Date().toISOString(), resetAt: new Date().toISOString() });
 }
 
 export async function saveAiMemory(weights: Record<string, number>): Promise<void> {

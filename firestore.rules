@@ -18,7 +18,7 @@ service cloud.firestore {
     }
 
     function ownerEmails() {
-      return ['allinoneaideveloper2026@gmail.com'];
+      return ['owner@malaroyale.com'];
     }
 
     function isDeveloper() {
@@ -38,7 +38,22 @@ service cloud.firestore {
 
     match /products/{productId} {
       allow read: if true;
-      allow write: if isStaff();
+      allow create, delete: if isStaff();
+      // Staff can change anything. A customer may only LOWER the quantity, by at most 10, and only in the
+      // same write that creates their own brand-new order (this is how stock is blocked when an order is placed).
+      allow update: if isStaff() || (
+        hasSession()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['quantity', 'lastReservationOrderId'])
+        && resource.data.get('quantity', null) is number
+        && request.resource.data.quantity is number
+        && request.resource.data.quantity >= 0
+        && request.resource.data.quantity < resource.data.quantity
+        && resource.data.quantity - request.resource.data.quantity <= 10
+        && request.resource.data.lastReservationOrderId is string
+        && !exists(/databases/$(database)/documents/orders/$(request.resource.data.lastReservationOrderId))
+        && existsAfter(/databases/$(database)/documents/orders/$(request.resource.data.lastReservationOrderId))
+        && getAfter(/databases/$(database)/documents/orders/$(request.resource.data.lastReservationOrderId)).data.userId == request.auth.uid
+      );
     }
 
     match /settings/{settingId} {
@@ -49,7 +64,13 @@ service cloud.firestore {
     match /orders/{orderId} {
       allow create: if hasSession()
         && request.resource.data.userId == request.auth.uid
-        && request.resource.data.courierNoticeAccepted == true;
+        && request.resource.data.courierNoticeAccepted == true
+        // Payment screenshots must be Cloudinary links (or empty), never another website.
+        && request.resource.data.get('itemPayment', {}).get('screenshotUrl', '') is string
+        && (
+          request.resource.data.get('itemPayment', {}).get('screenshotUrl', '') == ''
+          || request.resource.data.itemPayment.screenshotUrl.matches('^https://res[.]cloudinary[.]com/.+')
+        );
       allow read: if isStaff() || (hasSession() && resource.data.userId == request.auth.uid);
       allow update: if isStaff() || (
         hasSession()
@@ -62,7 +83,28 @@ service cloud.firestore {
         && request.resource.data.courierPayment.amount == resource.data.courierBill.amount
         && request.resource.data.courierPayment.utr.matches('^[0-9]{12}$')
         && request.resource.data.courierPayment.verified == false
+        && request.resource.data.courierPayment.screenshotUrl is string
+        && (
+          request.resource.data.courierPayment.screenshotUrl == ''
+          || request.resource.data.courierPayment.screenshotUrl.matches('^https://res[.]cloudinary[.]com/.+')
+        )
         && request.resource.data.courierPayment.submittedAt is string
+      ) || (
+        // After the host cancels an order, the customer may add where the refund should go (once).
+        hasSession()
+        && resource.data.userId == request.auth.uid
+        && resource.data.stage == 'NOT_ACCEPTED'
+        && resource.data.get('refundDetails', null) == null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['refundDetails', 'updatedAt'])
+        && request.resource.data.refundDetails.keys().hasOnly(['method', 'value', 'submittedAt'])
+        && request.resource.data.refundDetails.submittedAt is string
+        && request.resource.data.refundDetails.value is string
+        && (
+          (request.resource.data.refundDetails.method == 'UPI_PHONE'
+            && request.resource.data.refundDetails.value.matches('^[6-9][0-9]{9}$'))
+          || (request.resource.data.refundDetails.method == 'UPI_ID'
+            && request.resource.data.refundDetails.value.matches('^[A-Za-z0-9._-]{2,64}@[A-Za-z][A-Za-z0-9]{1,30}$'))
+        )
       );
       allow delete: if false;
     }
@@ -79,10 +121,17 @@ service cloud.firestore {
     // Customer enquiries from the website chat form. Only staff can read or manage them.
     match /enquiries/{enquiryId} {
       allow create: if hasSession()
-        && request.resource.data.keys().hasOnly(['userId', 'name', 'phone', 'message', 'productId', 'productName', 'status', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['userId', 'name', 'phone', 'message', 'productId', 'productName', 'kind', 'orderId', 'issueType', 'status', 'createdAt'])
         && request.resource.data.keys().hasAll(['userId', 'name', 'phone', 'message', 'status', 'createdAt'])
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.status == 'NEW'
+        // A payment report must point at one of the customer's own orders.
+        && (!('orderId' in request.resource.data) || (
+          request.resource.data.kind == 'PAYMENT_ISSUE'
+          && request.resource.data.orderId is string
+          && request.resource.data.get('issueType', '') is string
+          && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.userId == request.auth.uid
+        ))
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
         && request.resource.data.name.size() <= 80

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Product, ProductStatus } from '../../domain/types';
+import { productCreatedMs } from '../../analytics/orderMetrics';
 import { effectiveStatus, STATUS_LABELS, STATUS_COLORS } from '../../app/shared';
 
 export default function ProductManagerRow({
@@ -92,6 +93,11 @@ export default function ProductManagerRow({
           </div>
           <div style={{ fontSize: '0.85rem', color: '#666' }}>
             {typeof product.quantity === 'number' ? `Quantity in stock: ${product.quantity}` : 'Quantity not set'}
+          </div>
+          <div style={{ fontSize: '0.75rem', color: '#888' }}>
+            {productCreatedMs(product) > 0
+              ? `Uploaded ${new Date(productCreatedMs(product)).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+              : 'Upload time not recorded'}
           </div>
         </div>
         <span style={{ ...STATUS_COLORS[shownStatus], fontSize: '0.75rem', fontWeight: 'bold', padding: '0.2rem 0.6rem', borderRadius: '999px' }}>{STATUS_LABELS[shownStatus]}</span>

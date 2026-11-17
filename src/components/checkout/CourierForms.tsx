@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { useTr } from '../../lang/ui';
 import { Order, CourierBill } from '../../domain/types';
+import { isValidUtr, validateProofFile } from '../../domain/paymentProof';
+import { PaymentProofCapture, PaymentProofView, type ProofCheck } from './PaymentProof';
+import UpiPayBox from './UpiPayBox';
 
 export function CourierBillForm({
   order,
@@ -49,16 +52,22 @@ export function CourierBillForm({
 export function CourierPaymentForm({
   order,
   paymentQrUrl,
+  upiId = '',
+  payeeName = '',
   canSubmit,
   onSubmit,
 }: {
   order: Order;
   paymentQrUrl: string;
+  upiId?: string;
+  payeeName?: string;
   canSubmit: boolean;
-  onSubmit: (orderId: string, utr: string) => Promise<void>;
+  onSubmit: (orderId: string, utr: string, proof: File) => Promise<void>;
 }) {
   const tr = useTr();
   const [utr, setUtr] = useState('');
+  const [proof, setProof] = useState<File | null>(null);
+  const [check, setCheck] = useState<ProofCheck | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -66,11 +75,25 @@ export function CourierPaymentForm({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    const proofProblem = validateProofFile(proof);
+    if (proofProblem || !proof) {
+      setError(proofProblem);
+      return;
+    }
+    if (check?.blocking) {
+      setError(check.blocking);
+      return;
+    }
+    if (!isValidUtr(utr)) {
+      setError(tr('Enter the 12-digit UTR'));
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {
-      await onSubmit(order.orderId, utr.trim());
+      await onSubmit(order.orderId, utr.trim(), proof);
       setUtr('');
+      setProof(null);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Courier payment could not be submitted.');
     } finally {
@@ -81,20 +104,18 @@ export function CourierPaymentForm({
   return (
     <div style={{ marginTop: '0.7rem', padding: '0.8rem', backgroundColor: '#f7f2ef', borderRadius: '6px' }}>
       <p style={{ margin: '0 0 0.35rem' }}>{tr('Courier charge:')} <strong>₹{order.courierBill.amount}</strong></p>
-      {paymentQrUrl && <img src={paymentQrUrl} alt={tr('Courier payment QR')} style={{ width: '150px', height: '150px', objectFit: 'contain', display: 'block', margin: '0.6rem 0' }} />}
+      {!order.courierPayment && <div style={{ margin: '0.6rem 0' }}><UpiPayBox upiId={upiId} payeeName={payeeName} amount={order.courierBill.amount} note="Mala Royale courier" fallbackQrUrl={paymentQrUrl} tr={tr} /></div>}
       {order.courierPayment ? (
         <p role="status" style={{ marginBottom: 0, color: order.courierPayment.verified ? '#1b5e20' : '#8a4b08' }}>
           {order.courierPayment.verified ? tr('Courier payment confirmed by host.') : tr('Courier payment submitted; waiting for host confirmation.')}
           {' '}{tr('UTR:')} {order.courierPayment.utr}
+          <span style={{ display: 'block', marginTop: '0.4rem' }}><PaymentProofView url={order.courierPayment.screenshotUrl} caption={tr('Your payment screenshot')} /></span>
         </p>
       ) : !canSubmit ? (
         <p role="status" style={{ marginBottom: 0 }}>{tr('Sign in to submit this courier payment.')}</p>
       ) : (
         <form onSubmit={submit} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.6rem' }}>
-          <label style={{ flex: '1 1 190px' }}>
-            {tr('Courier payment UTR')}
-            <input value={utr} onChange={event => setUtr(event.target.value)} required inputMode="numeric" pattern="[0-9]{12}" maxLength={12} title={tr('Enter the 12-digit UTR')} style={{ display: 'block', boxSizing: 'border-box', width: '100%', padding: '0.55rem' }} />
-          </label>
+          <div style={{ flexBasis: '100%' }}><PaymentProofCapture file={proof} onFile={setProof} utr={utr} onUtr={setUtr} expectedAmount={order.courierBill.amount} onCheck={setCheck} label={tr('Payment screenshot (PhonePe, GPay, Paytm or bank app)')} /></div>
           <button type="submit" disabled={submitting} style={{ alignSelf: 'end', backgroundColor: '#6e1a3a', color: '#fff', border: 0, borderRadius: '4px', padding: '0.6rem 0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>
             {submitting ? tr('Submitting...') : `Submit ₹${order.courierBill.amount} payment`}
           </button>

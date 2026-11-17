@@ -142,7 +142,7 @@ export function HowItWorks() {
   const tr = useTr();
   const steps = [
     { title: tr('Choose your piece'), text: tr('Browse sarees and custom kuchu, check the photos in full size and add your favourites to the cart.') },
-    { title: tr('Pay by UPI'), text: tr('Scan the shop QR, pay securely and enter the 12-digit UTR number from your payment app.') },
+    { title: tr('Pay by UPI'), text: tr('Scan the shop QR, pay securely and attach the screenshot from your payment app. We read the 12-digit UTR for you.') },
     { title: tr('We confirm on WhatsApp'), text: tr('We check your address and payment, then confirm your order and share updates with you.') },
     { title: tr('Delivered to your door'), text: tr('We pack with care and send it by courier. Track every step in Recent orders.') },
   ];

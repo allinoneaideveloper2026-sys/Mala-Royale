@@ -48,7 +48,7 @@ export class OrderBook {
     };
 
     order.itemPayment = payment;
-    this.usedUtrs.add(utr);
+    this.usedUtrs.add(utr)
     order.updatedAt = new Date().toISOString();
     return order;
   }
@@ -56,6 +56,7 @@ export class OrderBook {
   public verifyPayment(orderId: string, kind: 'ITEM' | 'COURIER'): Order {
     const order = this.orders.get(orderId);
     if (!order) throw new Error('Order not found');
+    if (order.isWithheld) throw new Error('This order is on hold. Release the hold first.');
 
     if (kind === 'ITEM' && order.itemPayment) {
       if (!order.deliveryConfirmed) throw new Error('Host must confirm the delivery address before confirming payment.');
@@ -70,7 +71,7 @@ export class OrderBook {
     return order;
   }
 
-  public submitCourierPayment(orderId: string, userId: string, utr: string): Order {
+  public submitCourierPayment(orderId: string, userId: string, utr: string, screenshotUrl = ''): Order {
     const order = this.orders.get(orderId);
     if (!order || order.userId !== userId) throw new Error('Order not found');
     if (!order.courierBill) throw new Error('The host has not added a courier charge yet.');
@@ -85,7 +86,7 @@ export class OrderBook {
       kind: 'COURIER',
       amount: order.courierBill.amount,
       utr: normalizedUtr,
-      screenshotUrl: '',
+      screenshotUrl,
       verified: false,
       submittedAt,
     };
@@ -111,7 +112,7 @@ export class OrderBook {
   public submitForDispatch(orderId: string): Order {
     const order = this.orders.get(orderId);
     if (!order) throw new Error('Order not found');
-    if (order.isWithheld) throw new Error('Parcel is withheld by host.');
+    if (order.isWithheld) throw new Error('This order is on hold. Release the hold first.');
     if (!order.deliveryConfirmed) throw new Error('Host must confirm the delivery address before dispatch.');
     if (order.courierBill && !order.courierPayment?.verified) {
       throw new Error('Courier payment must be confirmed before dispatch.');
@@ -133,6 +134,7 @@ export class OrderBook {
   public markDelivered(orderId: string): Order {
     const order = this.orders.get(orderId);
     if (!order) throw new Error('Order not found');
+    if (order.isWithheld) throw new Error('This order is on hold. Release the hold first.');
     if (order.stage !== 'SUBMITTED_FOR_DISPATCH') throw new Error('Only dispatched orders can be marked delivered.');
     order.stage = 'DELIVERED';
     order.updatedAt = new Date().toISOString();
@@ -163,6 +165,38 @@ export class OrderBook {
 
   public getOrder(orderId: string): Order | undefined {
     return this.orders.get(orderId);
+  }
+
+  public submitRefundDetails(orderId: string, method: 'UPI_ID' | 'UPI_PHONE', value: string): Order {
+    const order = this.orders.get(orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.stage !== 'NOT_ACCEPTED') throw new Error('Refund details are only needed for cancelled orders.');
+    order.refundDetails = { method, value: value.trim(), submittedAt: new Date().toISOString() };
+    order.updatedAt = order.refundDetails.submittedAt;
+    return order;
+  }
+
+  public holdOrder(orderId: string, email: string, reason: string, note: string): Order {
+    const order = this.orders.get(orderId);
+    if (!order) throw new Error('Order not found');
+    if (['NOT_ACCEPTED', 'CANCELLED', 'DELIVERED', 'SUBMITTED_FOR_DISPATCH'].includes(order.stage)) throw new Error('This order can no longer be put on hold.');
+    order.isWithheld = true;
+    order.holdReason = reason;
+    order.holdNote = note;
+    order.heldAt = new Date().toISOString();
+    order.heldBy = email;
+    order.updatedAt = order.heldAt;
+    return order;
+  }
+
+  public releaseHold(orderId: string): Order {
+    const order = this.orders.get(orderId);
+    if (!order) throw new Error('Order not found');
+    order.isWithheld = false;
+    order.holdReason = '';
+    order.holdNote = '';
+    order.updatedAt = new Date().toISOString();
+    return order;
   }
 
   public getAllOrders(): Order[] {

@@ -422,7 +422,7 @@ function salesAgent(data: DataSnapshot, m: Metrics): Insight[] {
       agent: 'sales',
       title: `${plural(stalePending.length, 'order')} waiting over a day for payment confirmation`,
       detail: 'Customers who wait a long time for confirmation often cancel or lose trust.',
-      action: 'Open Orders, check the UTR for each one and confirm or reject it today.',
+      action: 'Open Orders, check the UTR and screenshot for each one and confirm or reject it today.',
       impact: 85,
       evidence: stalePending.slice(0, 4).map(order => `${order.orderId} (${order.address.fullName})`),
     });

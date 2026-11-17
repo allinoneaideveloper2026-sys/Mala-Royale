@@ -14,11 +14,20 @@ import { analyzeFeedback } from './analytics/feedback';
 import AboutSection, { type FeedbackResult } from './components/storefront/AboutSection';
 import { HowItWorks, OrderTimeline, StoryShowcase, ValueStrip } from './components/storefront/StorefrontSections';
 import { productCreatedMs } from './analytics/orderMetrics';
-import { fetchCheckoutQrFresh, attachCloudCourierBill, authorizeHost, checkDeliveryPincode, createCloudOrder, confirmCloudOrderDelivery, deleteCloudDeliveryAddress, deleteEnquiry, deleteFeedback, deleteProduct, isAuthorizedHost, isConfiguredDeveloper, isConfiguredOwner, markCloudOrderNotAccepted, markCloudOrderDelivered, publishProduct, revokeHost, saveCloudDeliveryAddress, saveAiMemory, saveCategories, saveCloudParcelDetails, saveContactSettings, saveOrderMessage, setEnquiryStatus, setFeedbackStatus, subscribeAiMemory, subscribeAuthorizedHosts, subscribeCategories, subscribeContactSettings, subscribeFeedback, subscribeCheckoutQr, subscribeEnquiries, subscribeSavedAddresses, subscribeOrders, subscribeProducts, submitCloudOrderForDispatch, submitCloudCourierPayment, submitEnquiry, submitFeedback, updateOrderDelivery, updateProduct, uploadCheckoutQr, uploadProductMedia, verifyCloudPayment } from './domain/firestoreStore';
+import { holdCloudOrder, releaseCloudOrderHold, saveUpiSettings, uploadPaymentProof, cacheProducts, refreshProductsFresh, fetchCheckoutQrFresh, resetAiMemory, submitRefundDetails, attachCloudCourierBill, authorizeHost, checkDeliveryPincode, createCloudOrder, confirmCloudOrderDelivery, deleteCloudDeliveryAddress, deleteEnquiry, deleteFeedback, deleteProduct, isAuthorizedHost, isConfiguredDeveloper, isConfiguredOwner, markCloudOrderNotAccepted, markCloudOrderDelivered, publishProduct, revokeHost, saveCloudDeliveryAddress, saveAiMemory, saveCategories, saveCloudParcelDetails, saveContactSettings, saveOrderMessage, setEnquiryStatus, setFeedbackStatus, subscribeAiMemory, subscribeAuthorizedHosts, subscribeCategories, subscribeContactSettings, subscribeFeedback, subscribeCheckoutQr, subscribeEnquiries, subscribeSavedAddresses, subscribeOrders, subscribeProducts, submitCloudOrderForDispatch, submitCloudCourierPayment, submitEnquiry, submitFeedback, updateOrderDelivery, updateProduct, uploadCheckoutQr, uploadProductMedia, verifyCloudPayment } from './domain/firestoreStore';
 import { INITIAL_CATALOG, LOGO_URL, DEFAULT_CATEGORIES, NEW_CATEGORY_VALUE, unitPrice, effectiveStatus, isPurchasable, maxOrderable, linkButtonStyle, STATUS_LABELS, STATUS_COLORS, mediaButtonStyle, whatsAppLink, type HostOrderTab, type HostTab, type SortKey, type CartLine } from './app/shared';
 import { WhatsAppIcon, GoogleSignInButton } from './components/common/icons';
 import ProductManagerRow from './components/host/ProductManagerRow';
-import { withTimeout, getOrderStatus } from './app/utils';
+import { withTimeout, getOrderStatus, getOrderStatusStyle, newestFirst } from './app/utils';
+import { validateRefundDetails } from './domain/refund';
+import UpiPayBox from './components/checkout/UpiPayBox';
+import ConfirmDialog from './components/host/ConfirmDialog';
+import { useOrderUpdates } from './app/orderUpdates';
+import ReportPaymentIssue from './components/checkout/ReportPaymentIssue';
+import { isValidUpiId } from './domain/upi';
+import { PaymentProofCapture, PaymentProofView, ProofCheckBadges, type ProofCheck } from './components/checkout/PaymentProof';
+import { fingerprintFile, isValidUtr, validateProofFile } from './domain/paymentProof';
+import RefundPrompt, { describeRefund } from './components/checkout/RefundPrompt';
 import { CourierBillForm, CourierPaymentForm } from './components/checkout/CourierForms';
 import DeliveryAddressFields from './components/checkout/DeliveryAddressFields';
 import { validateProductMedia, ProductGallery } from './components/storefront/ProductMedia';
@@ -64,6 +73,10 @@ export default function App() {
   const [addingCategory, setAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [paymentQrUpdatedAt, setPaymentQrUpdatedAt] = useState('');
+  const [upiId, setUpiId] = useState('');
+  const [payeeName, setPayeeName] = useState('');
+  const [upiDraft, setUpiDraft] = useState('');
+  const [payeeDraft, setPayeeDraft] = useState('');
   const [aiWeights, setAiWeights] = useState<Record<string, number>>({});
   const [newProduct, setNewProduct] = useState({ name: '', category: 'Sarees', price: '', offerPrice: '', quantity: '1', description: '', image: '' });
   const [productMediaFiles, setProductMediaFiles] = useState<File[]>([]);
@@ -126,6 +139,9 @@ export default function App() {
     consentTimestamp: ''
   });
   const [utr, setUtr] = useState('');
+  const [paymentProof, setPaymentProof] = useState<File | null>(null);
+  const [proofCheck, setProofCheck] = useState<ProofCheck | null>(null);
+  const [uploadingProof, setUploadingProof] = useState(false);
 
   const t = buildStrings(lang);
   const tr = useMemo(() => makeTr(lang), [lang]);
@@ -273,12 +289,19 @@ export default function App() {
 
   useEffect(() => {
     if (!firebaseConfigured) return;
-    return subscribeCheckoutQr((url, updatedAt) => {
+    return subscribeCheckoutQr((url, updatedAt, upi) => {
       setSyncError('');
       setPaymentQrUrl(url);
       setPaymentQrUpdatedAt(updatedAt || '');
+      setUpiId(upi.upiId);
+      setPayeeName(upi.payeeName);
+      setUpiDraft(upi.upiId);
+      setPayeeDraft(upi.payeeName);
     }, error => setSyncError(error.message), { live: isStaff });
   }, [isStaff]);
+
+  // Tells the customer which of their orders changed since they last looked (status, host message, hold, cancellation).
+  const { changed: changedOrders, markSeen: markOrderSeen } = useOrderUpdates(activeOrders, firebaseUser?.uid || userEmail || 'guest');
 
   // Always show the latest payment QR at the moment a customer is about to pay (cached copy may be up to 10 min old).
   const awaitingCourierPayment = activeOrders.some(order => Boolean(order.courierBill) && !order.courierPayment);
@@ -286,10 +309,12 @@ export default function App() {
     if (!firebaseConfigured || isStaff) return;
     if (!isCheckoutOpen && !awaitingCourierPayment) return;
     let cancelled = false;
-    fetchCheckoutQrFresh().then(({ url, updatedAt }) => {
+    fetchCheckoutQrFresh().then(({ url, updatedAt, upiId: freshUpiId, payeeName: freshPayee }) => {
       if (cancelled) return;
       setPaymentQrUrl(url);
       setPaymentQrUpdatedAt(updatedAt || '');
+      setUpiId(freshUpiId);
+      setPayeeName(freshPayee);
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [isCheckoutOpen, awaitingCourierPayment, isStaff]);
@@ -384,6 +409,19 @@ export default function App() {
     if (typeof window === 'undefined') return true;
     return window.confirm(`${message} This action requires host consent.`);
   };
+
+  // Pop-up confirmation for each host decision on an order (accept / hold / reject).
+  const [acceptDialog, setAcceptDialog] = useState<null | { title: string; details: string; confirmLabel: string; resolve: (ok: boolean) => void }>(null);
+  const askAccept = (title: string, details: string, confirmLabel: string) => new Promise<boolean>(resolve => {
+    setAcceptDialog({ title, details, confirmLabel, resolve });
+  });
+  const closeAcceptDialog = (ok: boolean) => {
+    acceptDialog?.resolve(ok);
+    setAcceptDialog(null);
+  };
+  const orderSummary = (order: Order | undefined) => (order
+    ? `${order.address?.fullName || 'Customer'} · ${order.items.length} item(s) · ₹${order.itemTotal}`
+    : '');
 
   // Developer Action: Add Host Email Whitelist
   const handleAddHost = async (e: React.FormEvent) => {
@@ -763,6 +801,87 @@ export default function App() {
     }
   };
 
+  const handleHoldOrder = async (orderId: string, reason: string, note: string) => {
+    try {
+      if (firebaseConfigured) {
+        await withTimeout(holdCloudOrder(orderId, firebaseUser?.email || userEmail, reason, note), 30000, 'Putting the order on hold is taking too long. Check your internet connection and try again.');
+      } else {
+        globalOrderBook.holdOrder(orderId, userEmail, reason, note);
+        setActiveOrders([...globalOrderBook.getAllOrders()]);
+      }
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not put the order on hold.');
+      throw error;
+    }
+  };
+
+  const handleReleaseOrder = async (orderId: string) => {
+    try {
+      if (firebaseConfigured) {
+        await withTimeout(releaseCloudOrderHold(orderId), 30000, 'Releasing the order is taking too long. Check your internet connection and try again.');
+      } else {
+        globalOrderBook.releaseHold(orderId);
+        setActiveOrders([...globalOrderBook.getAllOrders()]);
+      }
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not release the order.');
+      throw error;
+    }
+  };
+
+  const handleSaveUpi = async () => {
+    const id = upiDraft.trim();
+    if (id && !isValidUpiId(id)) {
+      alert('Enter a valid UPI ID, for example yourname@bank.');
+      return;
+    }
+    if (!confirmHostAction(id ? 'Save these UPI details? Customers will pay to this UPI ID.' : 'Turn off the dynamic QR and use only the uploaded QR?')) return;
+    try {
+      if (firebaseConfigured) await withTimeout(saveUpiSettings(id, payeeDraft), 30000, 'Saving is taking too long. Check your internet connection and try again.');
+      setUpiId(id);
+      setPayeeName(payeeDraft.trim());
+      alert(id ? 'UPI details saved. Checkout now makes a QR for each order amount.' : 'Dynamic QR turned off.');
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not save the UPI details.');
+    }
+  };
+
+  const handleReportPaymentIssue = async (order: Order, issueType: string, details: string) => {
+    if (!firebaseConfigured || !firebaseUser) throw new Error('Sign in with Google to send a report, or message us on WhatsApp.');
+    const phone = (order.address?.phone || '').replace(/\D/g, '');
+    await withTimeout(submitEnquiry(firebaseUser.uid, {
+      name: order.address?.fullName || 'Customer',
+      phone,
+      message: `[Payment problem] ${issueType}${details ? `\n${details}` : ''}\nOrder ${order.orderId} · item total ₹${order.itemTotal}${order.itemPayment?.utr ? ` · UTR ${order.itemPayment.utr}` : ''}`,
+      kind: 'PAYMENT_ISSUE',
+      orderId: order.orderId,
+      issueType,
+      productName: `Order ${order.orderId}`,
+    }), 30000, 'Sending is taking too long. Check your internet connection and try again.');
+  };
+
+  const handleSubmitRefund = async (orderId: string, method: 'UPI_ID' | 'UPI_PHONE', value: string) => {
+    if (firebaseConfigured) {
+      await withTimeout(submitRefundDetails(orderId, method, value), 30000, 'Saving is taking too long. Check your internet connection and try again.');
+    } else {
+      globalOrderBook.submitRefundDetails(orderId, method, value);
+      setActiveOrders([...globalOrderBook.getAllOrders()]);
+    }
+  };
+
+  const handleResetInsights = async () => {
+    if (role !== 'DEVELOPER') return;
+    if (!confirmHostAction('Reset everything the AI assistant learned from your thumbs up / down? This cannot be undone.')) return;
+    setAiWeights({});
+    if (firebaseConfigured) {
+      try {
+        await resetAiMemory();
+      } catch (error) {
+        setSyncError(error instanceof Error ? error.message : 'Could not reset the AI insights.');
+      }
+    }
+  };
+
   const handleSaveOrderMessage = async (orderId: string, message: string) => {
     try {
       if (firebaseConfigured) {
@@ -922,6 +1041,31 @@ export default function App() {
           return;
         }
       }
+      const proofProblem = validateProofFile(paymentProof);
+      if (proofProblem || !paymentProof) {
+        alert(tr(proofProblem));
+        return;
+      }
+      if (proofCheck?.blocking) {
+        alert(proofCheck.blocking);
+        return;
+      }
+      if (!isValidUtr(utr)) {
+        alert(tr('Enter the 12-digit UTR shown in your payment app.'));
+        return;
+      }
+      const proofFingerprint = await fingerprintFile(paymentProof);
+      let proofUrl = '';
+      if (firebaseConfigured) {
+        setUploadingProof(true);
+        try {
+          proofUrl = await withTimeout(uploadPaymentProof(paymentProof), 90000, 'Uploading the screenshot is taking too long. Check your internet connection and try again.');
+        } finally {
+          setUploadingProof(false);
+        }
+      } else {
+        proofUrl = URL.createObjectURL(paymentProof);
+      }
       const orderItems = cart.map(line => ({ productId: line.product.id, name: line.product.name, price: unitPrice(line.product), regularPrice: line.product.price, quantity: line.quantity }));
       const deliveryAddress: CustomerAddress = {
         ...address,
@@ -935,7 +1079,10 @@ export default function App() {
           cartTotal,
           deliveryAddress,
           courierPolicyAccepted,
-          utr,
+          utr.trim(),
+          proofUrl,
+          proofFingerprint,
+          proofCheck ? (({ blocking: _ignored, ...storable }) => storable)(proofCheck) : undefined,
         )
         : globalOrderBook.createOrder(
           userEmail,
@@ -946,8 +1093,20 @@ export default function App() {
         );
 
       if (!firebaseConfigured) {
-        globalOrderBook.submitItemPayment(order.orderId, cartTotal, utr, 'uploaded_proof.png');
+        globalOrderBook.submitItemPayment(order.orderId, cartTotal, utr.trim(), proofUrl);
         setActiveOrders(globalOrderBook.getAllOrders());
+      }
+      if (firebaseConfigured) {
+        // Stock was blocked for this order; update what the customer sees (and their saved copy) without extra reads.
+        const bought = new Map<string, number>();
+        orderItems.forEach(item => bought.set(item.productId, (bought.get(item.productId) || 0) + item.quantity));
+        const updatedProducts = products.map(product => (
+          bought.has(product.id) && typeof product.quantity === 'number'
+            ? { ...product, quantity: Math.max(0, product.quantity - (bought.get(product.id) || 0)) }
+            : product
+        ));
+        setProducts(updatedProducts);
+        cacheProducts(updatedProducts);
       }
       if (saveAddressForLater && (googleUser || !firebaseConfigured)) {
         const savedAddress: SavedDeliveryAddress = {
@@ -968,6 +1127,8 @@ export default function App() {
       }
       setCart([]);
       setUtr('');
+      setPaymentProof(null);
+      setProofCheck(null);
       setIsCheckoutOpen(false);
       setCheckoutStep(1);
       setCustomerTab('ORDERS');
@@ -979,6 +1140,8 @@ export default function App() {
         ? 'Firestore rejected this action. Check the deployed Firestore rules and signed-in account role.'
         : err.message;
       alert(message);
+      // The most likely reason is that stock changed, so show the customer the current quantities.
+      if (firebaseConfigured && !isStaff) void refreshProductsFresh().then(setProducts).catch(() => undefined);
     }
   };
 
@@ -991,6 +1154,7 @@ export default function App() {
       setSyncError('This pincode is not confirmed as deliverable. Contact the customer or courier.');
       return;
     }
+    if (!(await askAccept(`Accept the delivery address for ${order.orderId}?`, `${orderSummary(order)}. Pincode ${order.address.pincode || ''}: ${order.address.pincodeCheck.status}. The customer will see the order move forward.`, 'Accept address'))) return;
     try {
       if (firebaseConfigured) {
         await confirmCloudOrderDelivery(order.orderId, firebaseUser?.email || userEmail);
@@ -1005,7 +1169,9 @@ export default function App() {
 
   const handleVerifyPayment = async (orderId: string, kind: 'ITEM' | 'COURIER') => {
     const paymentKindLabel = kind === 'ITEM' ? 'item payment' : 'courier payment';
-    if (!confirmHostAction(`Verify the ${paymentKindLabel} for order ${orderId}?`)) return;
+    const target = activeOrders.find(item => item.orderId === orderId);
+    const paid = kind === 'ITEM' ? target?.itemPayment : target?.courierPayment;
+    if (!(await askAccept(`Accept the ${paymentKindLabel} for ${orderId}?`, `${orderSummary(target)}. Amount to confirm: ₹${paid?.amount ?? ''}${paid?.utr ? ` · UTR ${paid.utr}` : ''}. Only accept after checking your bank or UPI app.`, 'Payment received, accept'))) return;
     try {
       if (firebaseConfigured) {
         await verifyCloudPayment(orderId, kind);
@@ -1035,13 +1201,15 @@ export default function App() {
     }
   };
 
-  const handleCourierPayment = async (orderId: string, utr: string) => {
+  const handleCourierPayment = async (orderId: string, utr: string, proof: File) => {
     try {
+      const proofFingerprint = await fingerprintFile(proof);
       if (firebaseConfigured) {
         if (!firebaseUser) throw new Error('Sign in before submitting payment.');
-        await submitCloudCourierPayment(orderId, firebaseUser.uid, utr);
+        const proofUrl = await withTimeout(uploadPaymentProof(proof), 90000, 'Uploading the screenshot is taking too long. Check your internet connection and try again.');
+        await submitCloudCourierPayment(orderId, firebaseUser.uid, utr, proofUrl, proofFingerprint);
       } else {
-        globalOrderBook.submitCourierPayment(orderId, userEmail, utr);
+        globalOrderBook.submitCourierPayment(orderId, userEmail, utr, URL.createObjectURL(proof));
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
     } catch (error) {
@@ -1051,7 +1219,8 @@ export default function App() {
   };
 
   const handleDispatch = async (orderId: string) => {
-    if (!confirmHostAction(`Mark order ${orderId} as dispatched?`)) return;
+    const target = activeOrders.find(item => item.orderId === orderId);
+    if (!(await askAccept(`Mark ${orderId} as dispatched?`, `${orderSummary(target)}. The customer will see it as dispatched.`, 'Mark dispatched'))) return;
     try {
       if (firebaseConfigured) {
         await submitCloudOrderForDispatch(orderId);
@@ -1079,7 +1248,8 @@ export default function App() {
   };
 
   const handleDelivered = async (orderId: string) => {
-    if (!confirmHostAction(`Mark order ${orderId} as delivered?`)) return;
+    const target = activeOrders.find(item => item.orderId === orderId);
+    if (!(await askAccept(`Mark ${orderId} as delivered?`, `${orderSummary(target)}. This closes the order.`, 'Mark delivered'))) return;
     try {
       if (firebaseConfigured) {
         await markCloudOrderDelivered(orderId);
@@ -1206,7 +1376,7 @@ export default function App() {
   const newEnquiryCount = enquiries.filter(item => item.status === 'NEW').length;
   const newFeedbackCount = feedbackItems.filter(item => item.status === 'NEW').length;
 
-  const firstInFirstOut = (left: Order, right: Order) => left.createdAt.localeCompare(right.createdAt);
+  const firstInFirstOut = newestFirst; // host lists show the newest order first
   const hostActiveOrders = activeOrders
     .filter(order => !['SUBMITTED_FOR_DISPATCH', 'DELIVERED', 'NOT_ACCEPTED', 'CANCELLED'].includes(order.stage))
     .sort(firstInFirstOut);
@@ -1393,10 +1563,6 @@ export default function App() {
                 <input type="number" placeholder="Regular Price (₹) *" value={newProduct.price} onChange={e => setNewProduct({ ...newProduct, price: e.target.value })} required style={{ padding: '0.6rem' }} />
                 <input type="number" min="1" step="0.01" aria-label="Offer price (leave blank for no offer)" placeholder="Offer Price (₹) - blank = no offer" value={newProduct.offerPrice} onChange={e => setNewProduct({ ...newProduct, offerPrice: e.target.value })} style={{ padding: '0.6rem' }} />
                 <input type="number" min="0" step="1" aria-label="Quantity in stock" placeholder="Quantity in stock *" value={newProduct.quantity} onChange={e => setNewProduct({ ...newProduct, quantity: e.target.value })} required style={{ padding: '0.6rem' }} />
-                <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.25rem' }}>
-                  <input type="text" placeholder="Optional: direct image link (ends in .jpg, .png or .webp)" value={newProduct.image} onChange={e => setNewProduct({ ...newProduct, image: e.target.value })} style={{ padding: '0.6rem' }} />
-                  <small style={{ color: '#666' }}>Only used when no photo is uploaded. Google Drive, Google Photos and Instagram page links do not work as image links, so upload the photo instead.</small>
-                </div>
                 <div style={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
                   <label style={mediaButtonStyle}>
                     📷 Take photo
@@ -1453,6 +1619,19 @@ export default function App() {
               </div>
             </div>
 
+            <div style={{ backgroundColor: '#fff', padding: '1.2rem', border: '1px solid #ddd', borderRadius: '8px', marginBottom: '2rem' }}>
+              <h3 style={{ margin: '0 0 0.6rem' }}>Dynamic payment QR (recommended)</h3>
+              <p style={{ margin: '0 0 0.8rem', color: '#666', fontSize: '0.9rem' }}>
+                Add your UPI ID and the name on your UPI account. Checkout then makes a QR and a "Pay in your UPI app" button for the exact amount of each order (after offers), so customers do not type or change the amount. The uploaded QR above stays as a backup.
+              </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
+                <input aria-label="UPI ID" placeholder="UPI ID, for example name@bank" value={upiDraft} onChange={event => setUpiDraft(event.target.value)} style={{ padding: '0.5rem', flex: '1 1 220px' }} />
+                <input aria-label="Name on UPI account" placeholder="Name on UPI account" value={payeeDraft} onChange={event => setPayeeDraft(event.target.value)} style={{ padding: '0.5rem', flex: '1 1 180px' }} />
+                <button type="button" onClick={() => void handleSaveUpi()} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save UPI details</button>
+              </div>
+              <p style={{ margin: '0.6rem 0 0', fontSize: '0.8rem', color: upiId ? '#1b5e20' : '#8a4b08' }}>{upiId ? `Dynamic QR is on for ${upiId}.` : 'Not set: customers see the uploaded QR.'}</p>
+            </div>
+
             </>)}
             {hostTab === 'ENQUIRIES' && (<>
             {/* Customer enquiries */}
@@ -1477,6 +1656,7 @@ export default function App() {
                         <strong>{enquiry.name}</strong>
                         <span>· {enquiry.phone}</span>
                         <span style={{ fontSize: '0.75rem', fontWeight: 'bold', padding: '0.15rem 0.55rem', borderRadius: '999px', backgroundColor: enquiry.status === 'NEW' ? '#e8f5e9' : '#eee', color: enquiry.status === 'NEW' ? '#1b5e20' : '#555' }}>{enquiry.status === 'NEW' ? 'New' : 'Replied'}</span>
+                        {enquiry.kind === 'PAYMENT_ISSUE' && <span style={{ fontSize: '0.75rem', fontWeight: 'bold', padding: '0.15rem 0.55rem', borderRadius: '999px', backgroundColor: '#fdecea', color: '#8b1e2d', border: '1px solid #f5b5bd' }}>Payment problem{enquiry.orderId ? ` · ${enquiry.orderId}` : ''}</span>}
                       </div>
                       <div style={{ fontSize: '0.8rem', color: '#777', margin: '0.2rem 0' }}>{new Date(enquiry.createdAt).toLocaleString()}</div>
                       {enquiry.productName && <div style={{ fontSize: '0.85rem', color: '#555' }}>About: {enquiry.productName}</div>}
@@ -1556,7 +1736,7 @@ export default function App() {
                   <div className="mr-quick" role="tooltip">
                     <strong>{ord.address.fullName}</strong> · {ord.address.phone}<br />
                     {ord.items.map(item => `${item.name} × ${item.quantity}`).join(', ')}<br />
-                    {getOrderStatus(ord)}{ord.itemPayment ? ` · UTR ${ord.itemPayment.utr}` : ''}<br />
+                    {getOrderStatus(ord)}{ord.itemPayment?.utr ? ` · UTR ${ord.itemPayment.utr}` : ''}<br />
                     {[ord.address.city, ord.address.district, ord.address.pincode].filter(Boolean).join(', ')}
                   </div>
                   <button type="button" className="mr-order-head" aria-expanded={open} onClick={() => toggleOrder(ord.orderId)}>
@@ -1569,8 +1749,13 @@ export default function App() {
                   {open && (
                   <div className="mr-expand">
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center', marginTop: '0.6rem' }}>
-                    <span className="mr-status-chip">{getOrderStatus(ord)}</span>
+                    <span className="mr-status-chip" style={getOrderStatusStyle(ord)}>{getOrderStatus(ord)}</span>
                     {ord.rejectionReason && <span style={{ fontSize: '0.85rem', color: '#8b1e2d' }}>Rejected: {ord.rejectionReason}</span>}
+                    {ord.stage === 'NOT_ACCEPTED' && (
+                      <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: ord.refundDetails ? '#1b5e20' : '#664d03' }}>
+                        {ord.refundDetails ? `Refund ₹${ord.itemTotal} to ${describeRefund(ord)}` : 'Waiting for the customer to send refund details'}
+                      </span>
+                    )}
                   </div>
                   <p style={{ fontSize: '0.85rem', margin: '0.45rem 0', color: '#555' }}>
                     Received {new Date(ord.createdAt).toLocaleString()} · Updated {new Date(ord.updatedAt).toLocaleString()}
@@ -1602,8 +1787,9 @@ export default function App() {
                   <Suspense fallback={<LazyFallback />}><ParcelSheet key={`${ord.orderId}-${ord.parcelDetails?.savedAt || 'new'}`} order={ord} onSave={handleSaveParcel} /></Suspense>
                   {ord.itemPayment && (
                     <div style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
-                      Item payment: {ord.itemPayment.verified ? 'Confirmed' : 'Awaiting confirmation'} · UTR <code>{ord.itemPayment.utr}</code>
+                      Item payment: {ord.itemPayment.verified ? 'Confirmed' : 'Awaiting confirmation'}{ord.itemPayment.utr ? <> · UTR <code>{ord.itemPayment.utr}</code></> : null}<ProofCheckBadges check={ord.itemPayment.proofCheck} expectedAmount={ord.itemTotal} />
                       {!ord.itemPayment.verified && <button type="button" disabled={!ord.deliveryConfirmed} onClick={() => void handleVerifyPayment(ord.orderId, 'ITEM')} style={{ marginLeft: '0.5rem' }}>{t.verifyPayment}</button>}
+                      <div style={{ marginTop: '0.4rem' }}><PaymentProofView url={ord.itemPayment.screenshotUrl} /></div>
                     </div>
                   )}
                   {ord.courierBill && (
@@ -1614,6 +1800,7 @@ export default function App() {
                         <p style={{ margin: '0.4rem 0' }}>
                           Customer UTR: <code>{ord.courierPayment.utr}</code> · {ord.courierPayment.verified ? 'Confirmed' : 'Awaiting host confirmation'}
                           {!ord.courierPayment.verified && <button type="button" onClick={() => void handleVerifyPayment(ord.orderId, 'COURIER')} style={{ marginLeft: '0.5rem' }}>Confirm courier payment</button>}
+                          <span style={{ display: 'block', marginTop: '0.4rem' }}><PaymentProofView url={ord.courierPayment.screenshotUrl} caption="Courier payment screenshot" /></span>
                         </p>
                       )}
                     </div>
@@ -1623,7 +1810,7 @@ export default function App() {
                     {hostOrderTab === 'ACTIVE' && <button type="button" disabled={!canDispatch} onClick={() => void handleDispatch(ord.orderId)} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.45rem 0.8rem', borderRadius: '4px', cursor: canDispatch ? 'pointer' : 'not-allowed' }}>{t.markDispatched}</button>}
                     {hostOrderTab === 'DISPATCHED' && <button type="button" onClick={() => void handleDelivered(ord.orderId)} style={{ backgroundColor: '#2e7d32', color: '#fff', border: 'none', padding: '0.45rem 0.8rem', borderRadius: '4px', cursor: 'pointer' }}>Mark delivered</button>}
                   </div>
-                  <Suspense fallback={<LazyFallback />}><HostOrderActions key={`${ord.orderId}-${ord.hostMessageAt || 'new'}`} order={ord} canReject={hostOrderTab === 'ACTIVE'} onReject={handleRejectOrder} onSaveMessage={handleSaveOrderMessage} /></Suspense>
+                  <Suspense fallback={<LazyFallback />}><HostOrderActions key={`${ord.orderId}-${ord.hostMessageAt || 'new'}`} order={ord} canReject={hostOrderTab === 'ACTIVE'} onReject={handleRejectOrder} onHold={handleHoldOrder} onRelease={handleReleaseOrder} onSaveMessage={handleSaveOrderMessage} /></Suspense>
                   </div>
                   )}
                 </article>
@@ -1640,7 +1827,7 @@ export default function App() {
             )}
 
             {hostTab === 'INSIGHTS' && (
-              <Suspense fallback={<LazyFallback />}><HostAnalytics orders={activeOrders} products={products} enquiries={enquiries} weights={aiWeights} onFeedback={handleInsightFeedback} /></Suspense>
+              <Suspense fallback={<LazyFallback />}><HostAnalytics orders={activeOrders} products={products} enquiries={enquiries} weights={aiWeights} onFeedback={handleInsightFeedback} isDeveloper={role === 'DEVELOPER'} onReset={handleResetInsights} /></Suspense>
             )}
           </div>
         )}
@@ -1998,22 +2185,11 @@ export default function App() {
                         </div>
                       )}
                       <div style={{ backgroundColor: '#f7f2ef', padding: '1rem', borderRadius: '6px', margin: '0.8rem 0' }}>
-                        <p style={{ marginTop: 0, fontSize: '0.9rem' }}>{tr('Scan the payment QR provided by the host, then enter your 12-digit UTR reference.')}</p>
-                        {paymentQrUrl ? (
-                          <img src={paymentQrUrl} alt={tr('Host payment QR code')} style={{ width: '200px', height: '200px', maxWidth: '100%', objectFit: 'contain', display: 'block', margin: '0 auto' }} />
-                        ) : (
-                          <p role="status" style={{ marginBottom: 0, color: '#8a4b08' }}>{tr('The host has not added a payment QR yet.')}</p>
-                        )}
+                        <p style={{ marginTop: 0, fontSize: '0.9rem' }}>{tr('Scan the payment QR provided by the host, pay, then attach the screenshot from your payment app. We will read the 12-digit UTR from it for you to check.')}</p>
+                        <UpiPayBox upiId={upiId} payeeName={payeeName} amount={cartTotal} note="Mala Royale order" fallbackQrUrl={paymentQrUrl} tr={tr} />
                       </div>
-                      <input 
-                        type="text" 
-                        placeholder={t.enterUtr} 
-                        value={utr} 
-                        onChange={e => setUtr(e.target.value)} 
-                        required 
-                        style={{ width: '100%', padding: '0.6rem', border: '1px solid #ccc', borderRadius: '4px', margin: '0.8rem 0' }} 
-                      />
-                      <button type="submit" disabled={firebaseLoading} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}>{t.placeOrder}</button>
+                      <PaymentProofCapture file={paymentProof} onFile={setPaymentProof} utr={utr} onUtr={setUtr} expectedAmount={cartTotal} onCheck={setProofCheck} label={tr('Payment screenshot (PhonePe, GPay, Paytm or bank app)')} />
+                      <button type="submit" disabled={firebaseLoading || uploadingProof} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}>{uploadingProof ? tr('Uploading screenshot...') : t.placeOrder}</button>
                     </form>
                   )}
                 </div>
@@ -2031,20 +2207,43 @@ export default function App() {
                     <GoogleSignInButton onClick={() => void handleGoogleSignIn()} disabled={firebaseLoading} label={tr('Sign in with Google')} />
                   </div>
                 )}
+                {!isStaff && changedOrders.length > 0 && (
+                  <div role="status" aria-live="polite" style={{ backgroundColor: '#e8f0fe', border: '1px solid #b6ccf7', padding: '0.8rem', borderRadius: '8px', marginBottom: '1rem', display: 'grid', gap: '0.5rem' }}>
+                    <strong>{tr('Updates on your orders')}</strong>
+                    {changedOrders.map(order => (
+                      <div key={order.orderId} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center', fontSize: '0.9rem' }}>
+                        <span><code>{order.orderId}</code>: <strong>{tr(getOrderStatus(order))}</strong>{order.isWithheld && order.holdReason ? ` (${order.holdReason})` : ''}{order.stage === 'NOT_ACCEPTED' && order.rejectionReason ? ` (${order.rejectionReason})` : ''}</span>
+                        <button type="button" onClick={() => { setExpandedOrders(current => ({ ...current, [order.orderId]: true })); markOrderSeen(order.orderId); }} style={{ cursor: 'pointer' }}>{tr('View')}</button>
+                        <button type="button" onClick={() => markOrderSeen(order.orderId)} style={{ cursor: 'pointer' }}>{tr('Got it')}</button>
+                      </div>
+                    ))}
+                    {changedOrders.length > 1 && <button type="button" onClick={() => markOrderSeen()} style={{ justifySelf: 'start', cursor: 'pointer' }}>{tr('Dismiss all')}</button>}
+                  </div>
+                )}
                 {activeOrders.length === 0 ? (
                   <div style={{ backgroundColor: '#fff', padding: '1.5rem', borderRadius: '8px', border: '1px solid #eee' }}>
                     <p style={{ marginTop: 0 }}>{firebaseConfigured && !googleUser ? tr('No orders on this device yet.') : tr('No orders yet.')}</p>
                     <button type="button" onClick={() => setCustomerTab('SHOP')} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 0, padding: '0.6rem 1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>{tr('Browse the collection')}</button>
                   </div>
-                ) : activeOrders.map(ord => { const open = Boolean(expandedOrders[ord.orderId]); return (
+                ) : [...activeOrders].sort(newestFirst).map(ord => { const open = Boolean(expandedOrders[ord.orderId]); return (
                   <article key={ord.orderId} className="mr-order-row" style={{ backgroundColor: '#fff', border: '1px solid #eee', padding: '0.8rem 1rem', borderRadius: '10px', marginBottom: '0.8rem' }}>
                     <button type="button" className="mr-order-head is-customer" aria-expanded={open} onClick={() => toggleOrder(ord.orderId)}>
                       <span style={{ minWidth: 0 }}><span className="mr-order-label">{tr('Order ID')}</span><div className="mr-order-value" style={{ fontFamily: 'monospace' }}>{ord.orderId}</div></span>
                       <span className="mr-col-date" style={{ minWidth: 0 }}><span className="mr-order-label">{tr('Placed on')}</span><div className="mr-order-value">{new Date(ord.createdAt).toLocaleDateString()}</div></span>
                       <span><span className="mr-order-label">{tr('Total')}</span><div className="mr-order-value" style={{ color: '#6e1a3a' }}>₹{ord.itemTotal}</div></span>
-                      <span className="mr-status-chip">{tr(getOrderStatus(ord))}</span>
+                      <span className="mr-status-chip" style={getOrderStatusStyle(ord)}>{tr(getOrderStatus(ord))}</span>
                       <span className="mr-chevron" aria-hidden="true">›</span>
                     </button>
+                    {ord.isWithheld && !['NOT_ACCEPTED', 'CANCELLED', 'DELIVERED'].includes(ord.stage) && (
+                      <div role="status" style={{ margin: '0.6rem 0', padding: '0.7rem', background: '#fff3cd', border: '1px solid #ffe08a', borderRadius: '8px', fontSize: '0.9rem' }}>
+                        <strong>{tr('Your order is on hold')}</strong>{ord.holdReason ? `: ${ord.holdReason}` : ''}
+                        {ord.holdNote && <div style={{ marginTop: '0.25rem' }}>{ord.holdNote}</div>}
+                      </div>
+                    )}
+                    <ReportPaymentIssue order={ord} onSubmit={handleReportPaymentIssue} whatsappUrl={hostWhatsApp ? whatsAppLink(hostWhatsApp, `Hello Mala Royale, I have a problem with the payment for order ${ord.orderId}.`) : undefined} />
+                    {ord.stage === 'NOT_ACCEPTED' && (
+                      <RefundPrompt order={ord} onSubmit={handleSubmitRefund} validate={validateRefundDetails} />
+                    )}
                     {open && (
                     <div className="mr-expand">
                     <OrderTimeline order={ord} />
@@ -2061,6 +2260,7 @@ export default function App() {
                         </li>
                       ))}
                     </ul>
+                    {ord.itemPayment && <div style={{ margin: '0.4rem 0' }}><PaymentProofView url={ord.itemPayment.screenshotUrl} caption={tr('Your payment screenshot')} /></div>}
                     <p style={{ margin: '0.4rem 0', fontWeight: 'bold' }}>{tr('Order total: ₹')}{ord.itemTotal}</p>
                     <p style={{ margin: '0.4rem 0', color: '#666', fontSize: '0.85rem' }}>{tr('Last updated')} {new Date(ord.updatedAt).toLocaleString()}</p>
                     <div style={{ margin: '0.7rem 0', padding: '0.75rem', backgroundColor: '#f7f2ef', borderRadius: '6px' }}>
@@ -2080,7 +2280,7 @@ export default function App() {
                         <p style={{ margin: 0 }}>{tr('Courier Charge:')} <strong>₹{ord.courierBill.amount}</strong></p>
                       </div>
                     )}
-                    {ord.courierBill && <CourierPaymentForm order={ord} paymentQrUrl={paymentQrUrl} canSubmit={!firebaseConfigured || Boolean(firebaseUser)} onSubmit={handleCourierPayment} />}
+                    {ord.courierBill && <CourierPaymentForm order={ord} paymentQrUrl={paymentQrUrl} upiId={upiId} payeeName={payeeName} canSubmit={!firebaseConfigured || Boolean(firebaseUser)} onSubmit={handleCourierPayment} />}
                     </div>
                     )}
                   </article>
@@ -2189,6 +2389,16 @@ export default function App() {
             <WhatsAppIcon />
           </button>
         </div>
+      )}
+      {acceptDialog && (
+        <ConfirmDialog
+          title={acceptDialog.title}
+          details={acceptDialog.details}
+          confirmLabel={acceptDialog.confirmLabel}
+          tone="accept"
+          onCancel={() => closeAcceptDialog(false)}
+          onConfirm={() => closeAcceptDialog(true)}
+        />
       )}
     </div>
     </TrContext.Provider>
