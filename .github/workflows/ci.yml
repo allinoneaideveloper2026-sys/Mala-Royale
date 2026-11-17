@@ -24,5 +24,7 @@ jobs:
           VITE_OWNER_EMAILS: ${{ vars.VITE_OWNER_EMAILS }}
           VITE_DEVELOPER_EMAILS: ${{ vars.VITE_DEVELOPER_EMAILS }}
       - run: npm run typecheck
+      # vitest is installed only for CI so package.json and package-lock.json stay in sync with production builds.
+      - run: npm install --no-save vitest@2.1.9
       - run: npm test
       - run: npm run build
