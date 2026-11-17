@@ -4,7 +4,7 @@ The site is static files, so Cloudflare Pages serves it free with unlimited band
 backend (login and database).
 
 ## One-time setup
-1. Run `npm install` once locally (this updates `package-lock.json` for the new test tool) and commit it.
+1. Nothing to install locally. CI installs its own test tool (vitest) and does not change `package-lock.json`.
 2. Cloudflare dashboard -> Workers & Pages -> Create -> Pages -> Connect to Git -> pick this repo.
    - Build command: `npm run build`
    - Build output directory: `dist`
