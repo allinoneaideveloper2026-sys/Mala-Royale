@@ -19,12 +19,13 @@ import { CONFIG } from '../config';
 import { loadWithCache, writeCache } from './cache';
 import { validateRefundDetails } from './refund';
 import { isValidUpiId } from './upi';
+import { DEFAULT_SHIPPING, type CourierDecision, type ShippingConfig } from './shipping';
 import { isValidUtr, validateProofFile } from './paymentProof';
 import { compressImage } from '../app/imageCompress';
 import { firestore } from '../firebase';
 import { CourierBill, CustomerAddress, Enquiry, Feedback, FeedbackSentiment, Order, ParcelDetails, PaymentRecord, PincodeCheck, Product, ProductMedia, ProofCheckResult, ProductStatus, SavedDeliveryAddress } from './types';
 
-function requireFirestore(): Firestore {
+export function requireFirestore(): Firestore {
   if (!firestore) throw new Error('Firebase is not configured. Add the VITE_FIREBASE_* settings first.');
   return firestore;
 }
@@ -214,6 +215,39 @@ export async function fetchCheckoutQrFresh(): Promise<CheckoutSettings> {
 }
 
 // The shop's UPI ID lets checkout make a QR for the exact amount of each order.
+// Courier charge rules (A single saree, B Bangalore, C standard). Customers read them at checkout; staff change them.
+const readShipping = (data: Record<string, unknown> | undefined): ShippingConfig => ({
+  ruleAEnabled: data ? data.ruleAEnabled !== false : DEFAULT_SHIPPING.ruleAEnabled,
+  ruleBEnabled: data ? data.ruleBEnabled !== false : DEFAULT_SHIPPING.ruleBEnabled,
+  bangalorePrefixes: data && Array.isArray(data.bangalorePrefixes) ? data.bangalorePrefixes.filter((item): item is string => typeof item === 'string') : DEFAULT_SHIPPING.bangalorePrefixes,
+});
+
+export function subscribeShippingConfig(onChange: (config: ShippingConfig) => void, onError: (error: Error) => void, options: { live?: boolean } = {}) {
+  const db = requireFirestore();
+  if (!options.live) {
+    return loadWithCache<ShippingConfig>({
+      key: 'settings-shipping',
+      ttlMs: PUBLIC_CACHE_TTL_MS,
+      load: async () => {
+        const snapshot = await getDoc(doc(db, 'settings', 'shipping'));
+        return readShipping(snapshot.exists() ? snapshot.data() : undefined);
+      },
+      onChange,
+      onError,
+    });
+  }
+  return onSnapshot(doc(db, 'settings', 'shipping'), snapshot => {
+    const config = readShipping(snapshot.exists() ? snapshot.data() : undefined);
+    writeCache('settings-shipping', config);
+    onChange(config);
+  }, onError);
+}
+
+export async function saveShippingConfig(config: ShippingConfig): Promise<void> {
+  const db = requireFirestore();
+  await setDoc(doc(db, 'settings', 'shipping'), { ...config, updatedAt: new Date().toISOString() });
+}
+
 export async function saveUpiSettings(upiId: string, payeeName: string): Promise<void> {
   const db = requireFirestore();
   const cleanId = upiId.trim();
@@ -261,13 +295,14 @@ export function subscribeOrders(
 export async function isAuthorizedHost(email: string): Promise<boolean> {
   const db = requireFirestore();
   const host = await getDoc(doc(db, 'hostAccess', email.toLowerCase()));
-  return host.exists();
+  // A host switched off by the developer keeps the record but loses access.
+  return host.exists() && host.data().active !== false;
 }
 
 export function subscribeAuthorizedHosts(onChange: (emails: string[]) => void, onError: (error: Error) => void) {
   const db = requireFirestore();
   return onSnapshot(collection(db, 'hostAccess'), snapshot => {
-    const hosts = snapshot.docs.map(host => host.id.toLowerCase());
+    const hosts = snapshot.docs.filter(host => host.data().active !== false).map(host => host.id.toLowerCase());
     onChange(Array.from(new Set([...CONFIG.ownerEmails.map((email: string) => email.trim().toLowerCase()), ...hosts])).sort());
   }, onError);
 }
@@ -275,7 +310,7 @@ export function subscribeAuthorizedHosts(onChange: (emails: string[]) => void, o
 export async function authorizeHost(email: string): Promise<void> {
   const db = requireFirestore();
   const normalizedEmail = email.trim().toLowerCase();
-  await setDoc(doc(db, 'hostAccess', normalizedEmail), { email: normalizedEmail });
+  await setDoc(doc(db, 'hostAccess', normalizedEmail), { email: normalizedEmail, active: true }, { merge: true });
 }
 
 export async function revokeHost(email: string): Promise<void> {
@@ -293,6 +328,7 @@ export async function createCloudOrder(
   screenshotUrl = '',
   proofFingerprint = '',
   proofCheck?: ProofCheckResult,
+  courierDecision?: CourierDecision,
 ): Promise<Order> {
   const db = requireFirestore();
   if (!courierNoticeAccepted) throw new Error('Courier charge notice must be accepted prior to order placement.');
@@ -313,6 +349,7 @@ export async function createCloudOrder(
     verified: false,
     ...(proofCheck ? { proofCheck } : {}),
   };
+  const courierFields = courierDecision ? { courierRule: courierDecision.rule, courierWaived: courierDecision.waived, courierRuleReason: courierDecision.reason } : {};
   const order: Order = {
     orderId,
     userId,
@@ -355,14 +392,14 @@ export async function createCloudOrder(
       reservations.push({ ref: productSnapshot.ref, quantity: product.quantity - requested });
     });
 
-    transaction.set(orderRef, { ...order, stockReserved: true });
+    transaction.set(orderRef, { ...order, ...courierFields, stockReserved: true });
     transaction.set(paymentRef, { userId, orderId, createdAt: now });
     if (proofRef) transaction.set(proofRef, { userId, orderId, createdAt: now });
     // lastReservationOrderId lets the security rules confirm this stock change belongs to a brand-new order.
     reservations.forEach(update => transaction.update(update.ref, { quantity: update.quantity, lastReservationOrderId: orderId }));
   });
 
-  return { ...order, stockReserved: true };
+  return { ...order, ...courierFields, stockReserved: true };
 }
 
 function totalsByProduct(items: Order['items']): Array<[string, number]> {

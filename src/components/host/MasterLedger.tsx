@@ -13,6 +13,8 @@ export interface MasterLedgerProps {
   orders: Order[];
   products: Product[];
   onSaveDelivery: (orderId: string, deliveryPartner: string, deliveryComments: string) => Promise<void>;
+  /** Shows a Delete Row button on finished orders. The record is hidden and can be restored by the developer. */
+  onDeleteRow?: (order: Order) => void;
 }
 
 type StatusFilter = 'ALL' | 'ACTIVE' | 'DISPATCHED' | 'DELIVERED' | 'NOT_ACCEPTED';
@@ -60,7 +62,7 @@ const matchesStatus = (order: Order, filter: StatusFilter): boolean => {
 const cellStyle: React.CSSProperties = { padding: '0.5rem 0.6rem', borderBottom: '1px solid #eee', verticalAlign: 'top', fontSize: '0.8rem' };
 const headStyle: React.CSSProperties = { ...cellStyle, position: 'sticky', top: 0, background: '#f7f2ef', fontWeight: 'bold', textAlign: 'left', whiteSpace: 'nowrap', zIndex: 1 };
 
-export default function MasterLedger({ orders, products, onSaveDelivery }: MasterLedgerProps) {
+export default function MasterLedger({ orders, products, onSaveDelivery, onDeleteRow }: MasterLedgerProps) {
   const [query, setQuery] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -190,7 +192,7 @@ export default function MasterLedger({ orders, products, onSaveDelivery }: Maste
           <table style={{ borderCollapse: 'collapse', minWidth: '1500px', width: '100%' }}>
             <thead>
               <tr>
-                {['Timestamp', 'Order ID', 'Customer', 'Contact', 'User ID', 'Address', 'Order breakdown', 'Items total', 'Offer discount', 'Courier', 'Grand total', 'Status', 'Delivery partner', 'Delivery comments', ''].map(label => (
+                {['Timestamp', 'Order ID', 'Customer', 'Contact', 'User ID', 'Address', 'Order breakdown', 'Items total', 'Offer discount', 'Courier', 'Grand total', 'Status', 'Delivery partner', 'Delivery comments', '', 'Row'].map(label => (
                   <th key={label || 'save'} style={headStyle}>{label}</th>
                 ))}
               </tr>
@@ -240,6 +242,19 @@ export default function MasterLedger({ orders, products, onSaveDelivery }: Maste
                       {savingId === order.orderId ? 'Saving...' : 'Save'}
                     </button>
                   </td>
+                  <td style={cellStyle}>
+                    {onDeleteRow && (
+                      <button
+                        type="button"
+                        disabled={!['DELIVERED', 'NOT_ACCEPTED', 'CANCELLED'].includes(order.stage)}
+                        title={['DELIVERED', 'NOT_ACCEPTED', 'CANCELLED'].includes(order.stage) ? 'Delete this row' : 'Only finished orders can be deleted'}
+                        onClick={() => onDeleteRow(order)}
+                        style={{ background: '#fff', color: '#c62828', border: '1px solid #c62828', borderRadius: '4px', padding: '0.35rem 0.6rem', cursor: ['DELIVERED', 'NOT_ACCEPTED', 'CANCELLED'].includes(order.stage) ? 'pointer' : 'not-allowed', opacity: ['DELIVERED', 'NOT_ACCEPTED', 'CANCELLED'].includes(order.stage) ? 1 : 0.4 }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -250,7 +265,7 @@ export default function MasterLedger({ orders, products, onSaveDelivery }: Maste
                 <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: '#f7f2ef' }}>{inr(totals.offer)}</td>
                 <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: '#f7f2ef' }}>{inr(totals.courier)}</td>
                 <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: '#f7f2ef' }}>{inr(totals.grand)}</td>
-                <td style={{ ...cellStyle, background: '#f7f2ef' }} colSpan={4} />
+                <td style={{ ...cellStyle, background: '#f7f2ef' }} colSpan={5} />
               </tr>
             </tfoot>
           </table>

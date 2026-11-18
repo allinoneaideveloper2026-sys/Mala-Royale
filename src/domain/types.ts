@@ -9,6 +9,30 @@ export type OrderStage =
   | 'NOT_ACCEPTED'
   | 'CANCELLED';
 
+export interface HostRecord {
+  email: string;
+  /** Typed by the developer, for example H01. */
+  hostId: string;
+  /** Shown next to every action this host performs. */
+  nickname: string;
+  active: boolean;
+  createdAt?: string;
+  /** True for the owner emails set in the app settings: shown, but not removable here. */
+  fixed?: boolean;
+}
+
+export interface AuditEntry {
+  id: string;
+  at: string;
+  actorEmail: string;
+  actorHostId: string;
+  actorNickname: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  summary: string;
+}
+
 export interface ProofCheckResult {
   utrSource: 'auto' | 'edited' | 'manual';
   amountFound: boolean | null;
@@ -59,6 +83,8 @@ export interface CustomerAddress {
   taluk?: string;
   district?: string;
   state?: string;
+  /** Filled from the pincode (India) and can be changed by the customer. */
+  country?: string;
   street?: string;
   pincode: string;
   googleMapsPin?: string;
@@ -137,6 +163,14 @@ export interface Order {
   deliveryComments?: string;
   rejectionReason?: string;
   rejectionNote?: string;
+  /** Which courier rule applied when the order was placed (A single saree, B Bangalore, C standard charge). */
+  courierRule?: 'A' | 'B' | 'C';
+  courierWaived?: boolean;
+  courierRuleReason?: string;
+  /** A deleted row is hidden from host screens; only the developer can restore or remove it for good. */
+  deletedAt?: string;
+  deletedBy?: string;
+  deleteReason?: string;
   /** Why the host put this order on hold (shown to the customer). */
   holdReason?: string;
   holdNote?: string;

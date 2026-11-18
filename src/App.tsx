@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, Suspense, lazy } from 'rea
 import { GoogleAuthProvider, linkWithPopup, onAuthStateChanged, signInAnonymously, signInWithCredential, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { CONFIG } from './config';
 import { LANGUAGES, LANGUAGE_STORAGE_KEY, TrContext, buildStrings, isUiLanguage, makeTr, type UiLanguage } from './lang/ui';
-import { UserRole, Product, ProductStatus, Enquiry, Feedback, Order, CourierBill, CustomerAddress, ParcelDetails, ParcelParty, SavedDeliveryAddress } from './domain/types';
+import { UserRole, Product, ProductStatus, Enquiry, Feedback, Order, CourierBill, CustomerAddress, ParcelDetails, ParcelParty, SavedDeliveryAddress, HostRecord, AuditEntry } from './domain/types';
 import { globalOrderBook } from './domain/OrderBook';
 import { auth, firebaseConfigured } from './firebase';
 import AIOfferBannerContainer from './components/AIOfferBanner/AIOfferBannerContainer';
@@ -14,17 +14,20 @@ import { analyzeFeedback } from './analytics/feedback';
 import AboutSection, { type FeedbackResult } from './components/storefront/AboutSection';
 import { HowItWorks, OrderTimeline, StoryShowcase, ValueStrip } from './components/storefront/StorefrontSections';
 import { productCreatedMs } from './analytics/orderMetrics';
-import { holdCloudOrder, releaseCloudOrderHold, saveUpiSettings, uploadPaymentProof, cacheProducts, refreshProductsFresh, fetchCheckoutQrFresh, resetAiMemory, submitRefundDetails, attachCloudCourierBill, authorizeHost, checkDeliveryPincode, createCloudOrder, confirmCloudOrderDelivery, deleteCloudDeliveryAddress, deleteEnquiry, deleteFeedback, deleteProduct, isAuthorizedHost, isConfiguredDeveloper, isConfiguredOwner, markCloudOrderNotAccepted, markCloudOrderDelivered, publishProduct, revokeHost, saveCloudDeliveryAddress, saveAiMemory, saveCategories, saveCloudParcelDetails, saveContactSettings, saveOrderMessage, setEnquiryStatus, setFeedbackStatus, subscribeAiMemory, subscribeAuthorizedHosts, subscribeCategories, subscribeContactSettings, subscribeFeedback, subscribeCheckoutQr, subscribeEnquiries, subscribeSavedAddresses, subscribeOrders, subscribeProducts, submitCloudOrderForDispatch, submitCloudCourierPayment, submitEnquiry, submitFeedback, updateOrderDelivery, updateProduct, uploadCheckoutQr, uploadProductMedia, verifyCloudPayment } from './domain/firestoreStore';
+import { isAddressComplete } from './domain/address';
+import { saveShippingConfig, subscribeShippingConfig, holdCloudOrder, releaseCloudOrderHold, saveUpiSettings, uploadPaymentProof, cacheProducts, refreshProductsFresh, fetchCheckoutQrFresh, resetAiMemory, submitRefundDetails, attachCloudCourierBill, checkDeliveryPincode, createCloudOrder, confirmCloudOrderDelivery, deleteCloudDeliveryAddress, deleteEnquiry, deleteFeedback, deleteProduct, isAuthorizedHost, isConfiguredDeveloper, isConfiguredOwner, markCloudOrderNotAccepted, markCloudOrderDelivered, publishProduct, saveCloudDeliveryAddress, saveAiMemory, saveCategories, saveCloudParcelDetails, saveContactSettings, saveOrderMessage, setEnquiryStatus, setFeedbackStatus, subscribeAiMemory, subscribeCategories, subscribeContactSettings, subscribeFeedback, subscribeCheckoutQr, subscribeEnquiries, subscribeSavedAddresses, subscribeOrders, subscribeProducts, submitCloudOrderForDispatch, submitCloudCourierPayment, submitEnquiry, submitFeedback, updateOrderDelivery, updateProduct, uploadCheckoutQr, uploadProductMedia, verifyCloudPayment } from './domain/firestoreStore';
 import { INITIAL_CATALOG, LOGO_URL, DEFAULT_CATEGORIES, NEW_CATEGORY_VALUE, unitPrice, effectiveStatus, isPurchasable, maxOrderable, linkButtonStyle, STATUS_LABELS, STATUS_COLORS, mediaButtonStyle, whatsAppLink, type HostOrderTab, type HostTab, type SortKey, type CartLine } from './app/shared';
 import { WhatsAppIcon, GoogleSignInButton } from './components/common/icons';
 import ProductManagerRow from './components/host/ProductManagerRow';
 import { withTimeout, getOrderStatus, getOrderStatusStyle, newestFirst } from './app/utils';
 import { validateRefundDetails } from './domain/refund';
 import UpiPayBox from './components/checkout/UpiPayBox';
-import ConfirmDialog from './components/host/ConfirmDialog';
+import ConfirmDialog, { type DialogResult, type DialogReason } from './components/host/ConfirmDialog';
+import { deleteHostRecord, deleteOrderForever, getMyHostRecord, logAudit, restoreOrder, saveHostRecord, setHostActive, softDeleteOrder, subscribeAuditLog, subscribeHostRecords, validateHostRecord } from './domain/adminStore';
 import { useOrderUpdates } from './app/orderUpdates';
 import ReportPaymentIssue from './components/checkout/ReportPaymentIssue';
 import { isValidUpiId } from './domain/upi';
+import { DEFAULT_SHIPPING, evaluateCourierRules, normalizePincode, parsePrefixes, type ShippingConfig } from './domain/shipping';
 import { PaymentProofCapture, PaymentProofView, ProofCheckBadges, type ProofCheck } from './components/checkout/PaymentProof';
 import { fingerprintFile, isValidUtr, validateProofFile } from './domain/paymentProof';
 import RefundPrompt, { describeRefund } from './components/checkout/RefundPrompt';
@@ -58,6 +61,11 @@ export default function App() {
   const [syncError, setSyncError] = useState('');
   const [authorizedHosts, setAuthorizedHosts] = useState<string[]>(CONFIG.ownerEmails);
   const [newHostEmail, setNewHostEmail] = useState('');
+  const [newHostId, setNewHostId] = useState('');
+  const [newHostNickname, setNewHostNickname] = useState('');
+  const [hostRecords, setHostRecords] = useState<HostRecord[]>([]);
+  const [myHost, setMyHost] = useState<HostRecord | null>(null);
+  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [grantHostAccess, setGrantHostAccess] = useState(true);
   const [isUploadingProduct, setIsUploadingProduct] = useState(false);
   const [isUploadingQr, setIsUploadingQr] = useState(false);
@@ -73,6 +81,9 @@ export default function App() {
   const [addingCategory, setAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [paymentQrUpdatedAt, setPaymentQrUpdatedAt] = useState('');
+  const [shippingConfig, setShippingConfig] = useState<ShippingConfig>(DEFAULT_SHIPPING);
+  const [prefixDraft, setPrefixDraft] = useState('560');
+  const [forceCourier, setForceCourier] = useState<Record<string, boolean>>({});
   const [upiId, setUpiId] = useState('');
   const [payeeName, setPayeeName] = useState('');
   const [upiDraft, setUpiDraft] = useState('');
@@ -134,6 +145,8 @@ export default function App() {
     landmark2: '',
     taluk: '',
     district: '',
+    state: '',
+    country: 'India',
     pincode: '',
     googleMapsPin: '',
     consentTimestamp: ''
@@ -239,11 +252,24 @@ export default function App() {
 
   useEffect(() => {
     if (!firebaseConfigured || role !== 'DEVELOPER') return;
-    return subscribeAuthorizedHosts(hosts => {
+    return subscribeHostRecords(records => {
       setSyncError('');
-      setAuthorizedHosts(hosts);
+      setHostRecords(records);
+      setAuthorizedHosts(records.filter(record => record.active).map(record => record.email));
     }, error => setSyncError(error.message));
   }, [role]);
+
+  // Audit trail (developer only): the latest 100 actions with who did them and when.
+  useEffect(() => {
+    if (!firebaseConfigured || role !== 'DEVELOPER') return;
+    return subscribeAuditLog(setAuditEntries, error => setSyncError(error.message));
+  }, [role]);
+
+  // The signed-in host's own record, so every action can carry their nickname and host ID.
+  useEffect(() => {
+    if (!firebaseConfigured || role !== 'OWNER' || !userEmail) { setMyHost(null); return; }
+    getMyHostRecord(userEmail).then(setMyHost).catch(() => setMyHost(null));
+  }, [role, userEmail]);
 
   useEffect(() => {
     if (!firebaseConfigured || !isStaff) return;
@@ -298,6 +324,15 @@ export default function App() {
       setUpiDraft(upi.upiId);
       setPayeeDraft(upi.payeeName);
     }, error => setSyncError(error.message), { live: isStaff });
+  }, [isStaff]);
+
+  // Courier charge rules: customers read them (cached); staff see changes live.
+  useEffect(() => {
+    if (!firebaseConfigured) return;
+    return subscribeShippingConfig(config => {
+      setShippingConfig(config);
+      setPrefixDraft(config.bangalorePrefixes.join(', '));
+    }, () => undefined, { live: isStaff });
   }, [isStaff]);
 
   // Tells the customer which of their orders changed since they last looked (status, host message, hold, cancellation).
@@ -410,14 +445,29 @@ export default function App() {
     return window.confirm(`${message} This action requires host consent.`);
   };
 
-  // Pop-up confirmation for each host decision on an order (accept / hold / reject).
-  const [acceptDialog, setAcceptDialog] = useState<null | { title: string; details: string; confirmLabel: string; resolve: (ok: boolean) => void }>(null);
-  const askAccept = (title: string, details: string, confirmLabel: string) => new Promise<boolean>(resolve => {
-    setAcceptDialog({ title, details, confirmLabel, resolve });
+  // Pop-up confirmation for each host decision (accept / hold / reject / delete).
+  const [acceptDialog, setAcceptDialog] = useState<null | {
+    title: string; details: string; confirmLabel: string; tone: 'accept' | 'hold' | 'danger'; reasons?: DialogReason[];
+    resolve: (result: DialogResult | null) => void;
+  }>(null);
+  const askDialog = (spec: { title: string; details: string; confirmLabel: string; tone?: 'accept' | 'hold' | 'danger'; reasons?: DialogReason[] }) => new Promise<DialogResult | null>(resolve => {
+    setAcceptDialog({ ...spec, tone: spec.tone || 'accept', resolve });
   });
-  const closeAcceptDialog = (ok: boolean) => {
-    acceptDialog?.resolve(ok);
+  const askAccept = async (title: string, details: string, confirmLabel: string) => (await askDialog({ title, details, confirmLabel })) !== null;
+  const closeAcceptDialog = (result: DialogResult | null) => {
+    acceptDialog?.resolve(result);
     setAcceptDialog(null);
+  };
+
+  // Who is acting: shown beside every action in the audit trail.
+  const actor = () => ({
+    email: (firebaseUser?.email || userEmail || '').toLowerCase(),
+    hostId: role === 'DEVELOPER' ? 'DEV' : (myHost?.hostId || 'OWNER'),
+    nickname: role === 'DEVELOPER' ? 'Developer' : (myHost?.nickname || 'Owner'),
+  });
+  const audit = (action: string, targetType: string, targetId: string, summary: string) => {
+    if (!firebaseConfigured || !isStaff) return;
+    void logAudit(actor(), action, targetType, targetId, summary).catch(error => console.warn('Audit entry not saved:', error));
   };
   const orderSummary = (order: Order | undefined) => (order
     ? `${order.address?.fullName || 'Customer'} · ${order.items.length} item(s) · ₹${order.itemTotal}`
@@ -426,41 +476,126 @@ export default function App() {
   // Developer Action: Add Host Email Whitelist
   const handleAddHost = async (e: React.FormEvent) => {
     e.preventDefault();
-    const normalizedEmail = newHostEmail.trim().toLowerCase();
-    if (!normalizedEmail || !grantHostAccess) return;
-    if (authorizedHosts.length >= CONFIG.maxHostLogins) {
+    const record = { email: newHostEmail.trim().toLowerCase(), hostId: newHostId.trim(), nickname: newHostNickname.trim() };
+    const problem = validateHostRecord(record);
+    if (problem) {
+      alert(problem);
+      return;
+    }
+    const existing = hostRecords.find(host => host.email === record.email);
+    const countedHosts = hostRecords.filter(host => !host.fixed);
+    if (!existing && countedHosts.length >= CONFIG.maxHostLogins) {
       alert(`Limit reached: Maximum of ${CONFIG.maxHostLogins} host logins allowed.`);
       return;
     }
-    if (!authorizedHosts.some(host => host.toLowerCase() === normalizedEmail)) {
-      if (!confirmHostAction(`Authorize ${normalizedEmail} as a host?`)) return;
-      try {
-        if (firebaseConfigured) {
-          await authorizeHost(normalizedEmail);
-        } else {
-          setAuthorizedHosts([...authorizedHosts, normalizedEmail]);
-        }
-        setNewHostEmail('');
-        alert(`Host email ${normalizedEmail} successfully authorized.`);
-      } catch (error) {
-        setSyncError(error instanceof Error ? error.message : 'Could not authorize host.');
+    if (hostRecords.some(host => host.hostId.toLowerCase() === record.hostId.toLowerCase() && host.email !== record.email)) {
+      alert('That Host ID is already used by another host.');
+      return;
+    }
+    if (!(await askAccept(`Add ${record.nickname} as a host?`, `${record.email} · Host ID ${record.hostId}. They will be able to see and act on orders. Every action they take is logged with this nickname.`, 'Add host'))) return;
+    try {
+      if (firebaseConfigured) {
+        await saveHostRecord(record, actor().email);
+        audit('HOST_ADDED', 'host', record.email, `Added host ${record.nickname} (${record.hostId})`);
+      } else {
+        setHostRecords([...hostRecords, { ...record, active: true }]);
+        setAuthorizedHosts([...authorizedHosts, record.email]);
       }
+      setNewHostEmail('');
+      setNewHostId('');
+      setNewHostNickname('');
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not add the host.');
     }
   };
 
-  const handleHostAccessToggle = async (email: string, enabled: boolean) => {
-    const action = enabled ? `Authorize ${email} as a host?` : `Revoke host access for ${email}?`;
-    if (!confirmHostAction(action)) return;
+  // Quick switch: turn a host's access on or off without deleting them.
+  const handleHostActiveToggle = async (host: HostRecord, active: boolean) => {
+    if (!(await askAccept(`${active ? 'Turn on' : 'Turn off'} access for ${host.nickname}?`, `${host.email} will ${active ? 'be able to use' : 'no longer be able to use'} the host view${active ? '' : ' until you turn it back on'}.`, active ? 'Turn on' : 'Turn off'))) return;
     try {
-      if (enabled) {
-        await authorizeHost(email);
-      } else if (firebaseConfigured) {
-        await revokeHost(email);
+      if (firebaseConfigured) {
+        await setHostActive(host.email, active);
+        audit(active ? 'HOST_ENABLED' : 'HOST_DISABLED', 'host', host.email, `${active ? 'Enabled' : 'Disabled'} host ${host.nickname} (${host.hostId})`);
       } else {
-        setAuthorizedHosts(hosts => hosts.filter(host => host !== email));
+        setHostRecords(records => records.map(record => record.email === host.email ? { ...record, active } : record));
+        setAuthorizedHosts(hosts => active ? [...hosts, host.email] : hosts.filter(email => email !== host.email));
       }
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not update host access.');
+    }
+  };
+
+  // Permanent removal of a host and their access.
+  const handleDeleteHost = async (host: HostRecord) => {
+    if (!(await askDialog({ title: `Delete host ${host.nickname} for good?`, details: `${host.email} loses access and the host record is removed. Past actions stay in the audit trail with their nickname. This cannot be undone.`, confirmLabel: 'Delete host', tone: 'danger' }))) return;
+    try {
+      if (firebaseConfigured) {
+        await deleteHostRecord(host.email);
+        audit('HOST_DELETED', 'host', host.email, `Deleted host ${host.nickname} (${host.hostId})`);
+      } else {
+        setHostRecords(records => records.filter(record => record.email !== host.email));
+        setAuthorizedHosts(hosts => hosts.filter(email => email !== host.email));
+      }
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not delete the host.');
+    }
+  };
+
+  const DELETE_REASONS: DialogReason[] = [
+    { label: 'Test or duplicate order', note: '' },
+    { label: 'Fake or spam order', note: '' },
+    { label: 'Old record clean-up', note: '' },
+    { label: 'Other', note: '' },
+  ];
+
+  // Delete a row from Order History / Master Ledger. The record is hidden, not erased; the developer can restore it.
+  const handleDeleteOrderRow = async (order: Order) => {
+    if (!['DELIVERED', 'NOT_ACCEPTED', 'CANCELLED'].includes(order.stage)) {
+      alert('Only finished orders (delivered, not accepted or cancelled) can be deleted.');
+      return;
+    }
+    const result = await askDialog({ title: `Delete ${order.orderId}?`, details: `${orderSummary(order)}. The row is removed from History and the Master Ledger. The customer keeps their own copy. The developer can restore it.`, confirmLabel: 'Delete row', tone: 'danger', reasons: DELETE_REASONS });
+    if (!result) return;
+    const reason = [result.reason, result.note].filter(Boolean).join(': ');
+    try {
+      if (firebaseConfigured) {
+        await withTimeout(softDeleteOrder(order.orderId, actor().nickname, reason), 30000, 'Deleting is taking too long. Check your internet connection and try again.');
+        audit('ORDER_DELETED', 'order', order.orderId, `Deleted row: ${reason}`);
+      } else {
+        setActiveOrders(orders => orders.map(item => item.orderId === order.orderId ? { ...item, deletedAt: new Date().toISOString(), deletedBy: actor().nickname, deleteReason: reason } : item));
+      }
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not delete the row.');
+    }
+  };
+
+  const handleRestoreOrderRow = async (order: Order) => {
+    if (role !== 'DEVELOPER') return;
+    if (!(await askAccept(`Restore ${order.orderId}?`, 'It will appear again in History and the Master Ledger.', 'Restore'))) return;
+    try {
+      if (firebaseConfigured) {
+        await restoreOrder(order.orderId);
+        audit('ORDER_RESTORED', 'order', order.orderId, 'Restored a deleted row');
+      } else {
+        setActiveOrders(orders => orders.map(item => { if (item.orderId !== order.orderId) return item; const { deletedAt: _a, deletedBy: _b, deleteReason: _c, ...rest } = item; return rest as Order; }));
+      }
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not restore the row.');
+    }
+  };
+
+  const handleDeleteOrderForever = async (order: Order) => {
+    if (role !== 'DEVELOPER') return;
+    if (!(await askDialog({ title: `Permanently delete ${order.orderId}?`, details: 'The order record is erased and cannot be restored. The customer will also lose it.', confirmLabel: 'Delete permanently', tone: 'danger' }))) return;
+    try {
+      if (firebaseConfigured) {
+        await deleteOrderForever(order.orderId);
+        audit('ORDER_ERASED', 'order', order.orderId, 'Permanently deleted an order record');
+      } else {
+        setActiveOrders(orders => orders.filter(item => item.orderId !== order.orderId));
+      }
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not delete the record.');
     }
   };
 
@@ -518,6 +653,7 @@ export default function App() {
       };
       if (firebaseConfigured) {
         await withTimeout(publishProduct(addedProduct), 60000, 'Saving the item is taking too long. Check your connection; if it does not appear in the catalog, try again.');
+        audit('PRODUCT_PUBLISHED', 'product', addedProduct.id, `Published ${addedProduct.name}`);
       } else {
         setProducts([addedProduct, ...products]);
       }
@@ -575,6 +711,7 @@ export default function App() {
     try {
       if (firebaseConfigured) {
         await withTimeout(updateProduct(productId, changes), 30000, 'Saving the changes is taking too long. Check your internet connection and try again.');
+        audit('PRODUCT_UPDATED', 'product', productId, `Edited: ${Object.keys(changes).join(', ')}`);
       } else {
         setProducts(current => current.map(product => product.id === productId ? { ...product, ...changes } : product));
       }
@@ -592,6 +729,7 @@ export default function App() {
       } else {
         setProducts(current => current.filter(item => item.id !== product.id));
       }
+      audit('PRODUCT_DELETED', 'product', product.id, `Deleted product ${product.name}`);
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not remove the product.');
       throw error;
@@ -708,6 +846,7 @@ export default function App() {
       const nextCustom = [...customCategories, name];
       if (firebaseConfigured) {
         await withTimeout(saveCategories(nextCustom), 30000, 'Saving the category is taking too long. Check your internet connection and try again.');
+        audit('CATEGORIES_CHANGED', 'settings', 'categories', 'Added a category');
       }
       setCustomCategories(nextCustom);
       setNewProduct(current => ({ ...current, category: name }));
@@ -724,6 +863,7 @@ export default function App() {
       const nextCustom = customCategories.filter(option => option !== name);
       if (firebaseConfigured) {
         await withTimeout(saveCategories(nextCustom), 30000, 'Removing the category is taking too long. Check your internet connection and try again.');
+        audit('CATEGORIES_CHANGED', 'settings', 'categories', 'Removed a category');
       }
       setCustomCategories(nextCustom);
       if (newProduct.category === name) setNewProduct(current => ({ ...current, category: DEFAULT_CATEGORIES[0] }));
@@ -795,6 +935,7 @@ export default function App() {
         globalOrderBook.markNotAccepted(orderId);
         setActiveOrders([...globalOrderBook.getAllOrders()].map(order => order.orderId === orderId ? { ...order, rejectionReason: reason, rejectionNote: note } : order));
       }
+      audit('ORDER_REJECTED', 'order', orderId, `Rejected: ${reason}`);
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not reject the order.');
       throw error;
@@ -809,6 +950,7 @@ export default function App() {
         globalOrderBook.holdOrder(orderId, userEmail, reason, note);
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
+      audit('ORDER_HELD', 'order', orderId, `On hold: ${reason}`);
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not put the order on hold.');
       throw error;
@@ -823,9 +965,40 @@ export default function App() {
         globalOrderBook.releaseHold(orderId);
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
+      audit('ORDER_RELEASED', 'order', orderId, 'Hold released');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not release the order.');
       throw error;
+    }
+  };
+
+  // One-time setup of the AI screenshot reader (developer only): accepts the AI model's licence on your Cloudflare account.
+  const handleAcceptAiLicense = async () => {
+    try {
+      const token = await auth?.currentUser?.getIdToken();
+      if (!token) throw new Error('Sign in with Google first.');
+      const response = await fetch('/api/ai-license', { headers: { Authorization: `Bearer ${token}` } });
+      const body = await response.json() as { ok: boolean; message?: string; error?: string };
+      alert(body.ok ? (body.message || 'Done.') : `Not done: ${body.error || 'unknown error'}`);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not reach the server.');
+    }
+  };
+
+  const handleSaveShipping = async () => {
+    const prefixes = parsePrefixes(prefixDraft);
+    if (shippingConfig.ruleBEnabled && prefixes.length === 0) {
+      alert('Enter at least one Bangalore pincode prefix, for example 560.');
+      return;
+    }
+    if (!(await askAccept('Save courier charge rules?', 'New orders will use these rules straight away. Existing orders are not changed.', 'Save rules'))) return;
+    const next = { ...shippingConfig, bangalorePrefixes: prefixes };
+    try {
+      if (firebaseConfigured) await withTimeout(saveShippingConfig(next), 30000, 'Saving is taking too long. Check your internet connection and try again.');
+      setShippingConfig(next);
+      audit('SHIPPING_RULES_CHANGED', 'settings', 'shipping', `Rule A ${next.ruleAEnabled ? 'on' : 'off'}, Rule B ${next.ruleBEnabled ? 'on' : 'off'} (${prefixes.join(', ')})`);
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not save the courier rules.');
     }
   };
 
@@ -841,6 +1014,7 @@ export default function App() {
       setUpiId(id);
       setPayeeName(payeeDraft.trim());
       alert(id ? 'UPI details saved. Checkout now makes a QR for each order amount.' : 'Dynamic QR turned off.');
+      audit('UPI_SETTINGS_CHANGED', 'settings', 'checkout', upiDraft.trim() ? `UPI ID set to ${upiDraft.trim()}` : 'Dynamic QR turned off');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not save the UPI details.');
     }
@@ -889,6 +1063,7 @@ export default function App() {
       } else {
         setActiveOrders(current => current.map(order => order.orderId === orderId ? { ...order, hostMessage: message, hostMessageAt: new Date().toISOString() } : order));
       }
+      audit('MESSAGE_TO_CUSTOMER', 'order', orderId, 'Sent a message to the customer');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not save the message.');
       throw error;
@@ -904,6 +1079,7 @@ export default function App() {
     try {
       if (firebaseConfigured) {
         await withTimeout(saveContactSettings(digits), 30000, 'Saving the number is taking too long. Check your internet connection and try again.');
+        audit('WHATSAPP_NUMBER_CHANGED', 'settings', 'contact', 'Changed the shop WhatsApp number');
       } else {
         setHostWhatsApp(digits);
       }
@@ -998,9 +1174,20 @@ export default function App() {
   const cartTotal = cart.reduce((sum, line) => sum + unitPrice(line.product) * line.quantity, 0);
 
   // Customer Action: Submit Order via OrderBook Engine
+  // Which courier rule applies to the order being placed (checked again by the host).
+  const customerKey = firebaseUser?.uid || userEmail || 'guest';
+  const courierDecision = evaluateCourierRules({
+    items: cart.map(line => ({ quantity: line.quantity })),
+    pincode: address.pincode || '',
+    userId: customerKey,
+    recentOrders: isStaff ? [] : activeOrders,
+    config: shippingConfig,
+    now: Date.now(),
+  });
+
   const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!address.fullName.trim() || !address.phone.trim() || !address.street1?.trim() || !address.city?.trim() || !address.landmark1.trim() || !address.district?.trim() || !/^\d{6}$/.test(address.pincode)) {
+    if (!isAddressComplete(address)) {
       alert(tr('Complete the required delivery-address fields before placing your order.'));
       setCheckoutStep(1);
       return;
@@ -1069,6 +1256,7 @@ export default function App() {
       const orderItems = cart.map(line => ({ productId: line.product.id, name: line.product.name, price: unitPrice(line.product), regularPrice: line.product.price, quantity: line.quantity }));
       const deliveryAddress: CustomerAddress = {
         ...address,
+        country: address.country?.trim() || 'India',
         street: [address.houseNameOrNumber, address.street1, address.street2].filter(Boolean).join(', '),
         consentTimestamp: new Date().toISOString(),
       };
@@ -1083,6 +1271,7 @@ export default function App() {
           proofUrl,
           proofFingerprint,
           proofCheck ? (({ blocking: _ignored, ...storable }) => storable)(proofCheck) : undefined,
+          courierDecision,
         )
         : globalOrderBook.createOrder(
           userEmail,
@@ -1162,6 +1351,7 @@ export default function App() {
         globalOrderBook.confirmDelivery(order.orderId, userEmail);
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
+      audit('ADDRESS_ACCEPTED', 'order', order.orderId, `Accepted delivery address (${order.address.pincode || 'no pincode'})`);
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not confirm the delivery address.');
     }
@@ -1179,6 +1369,7 @@ export default function App() {
         globalOrderBook.verifyPayment(orderId, kind);
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
+      audit(kind === 'ITEM' ? 'ITEM_PAYMENT_ACCEPTED' : 'COURIER_PAYMENT_ACCEPTED', 'order', orderId, `Accepted ${paymentKindLabel}`);
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not verify payment.');
     }
@@ -1195,6 +1386,7 @@ export default function App() {
         globalOrderBook.attachCourierBill(orderId, bill);
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
+      audit('COURIER_BILL_ADDED', 'order', orderId, `Courier charge ₹${bill.amount} (${bill.courierName})`);
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not save courier bill.');
       throw error;
@@ -1228,6 +1420,7 @@ export default function App() {
         globalOrderBook.submitForDispatch(orderId);
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
+      audit('ORDER_DISPATCHED', 'order', orderId, 'Marked dispatched');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not submit order for dispatch.');
     }
@@ -1257,6 +1450,7 @@ export default function App() {
         globalOrderBook.markDelivered(orderId);
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
+      audit('ORDER_DELIVERED', 'order', orderId, 'Marked delivered');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not mark order delivered.');
     }
@@ -1291,6 +1485,7 @@ export default function App() {
         district: result.district || previous.district,
         taluk: result.taluk || previous.taluk,
         state: result.state || previous.state,
+        country: previous.country || 'India',
         pincodeCheck: result,
       }));
     } finally {
@@ -1300,7 +1495,7 @@ export default function App() {
 
   const handleSaveDeliveryAddress = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!address.fullName.trim() || !address.phone.trim() || !address.street1?.trim() || !address.city?.trim() || !address.landmark1.trim() || !address.district?.trim() || !/^\d{6}$/.test(address.pincode)) {
+    if (!isAddressComplete(address)) {
       alert(tr('Complete all required delivery-address fields before saving.'));
       return;
     }
@@ -1377,13 +1572,15 @@ export default function App() {
   const newFeedbackCount = feedbackItems.filter(item => item.status === 'NEW').length;
 
   const firstInFirstOut = newestFirst; // host lists show the newest order first
-  const hostActiveOrders = activeOrders
+  const deletedOrders = activeOrders.filter(order => Boolean(order.deletedAt));
+  const liveOrders = activeOrders.filter(order => !order.deletedAt);
+  const hostActiveOrders = liveOrders
     .filter(order => !['SUBMITTED_FOR_DISPATCH', 'DELIVERED', 'NOT_ACCEPTED', 'CANCELLED'].includes(order.stage))
     .sort(firstInFirstOut);
-  const hostDispatchedOrders = activeOrders
+  const hostDispatchedOrders = liveOrders
     .filter(order => order.stage === 'SUBMITTED_FOR_DISPATCH')
     .sort(firstInFirstOut);
-  const hostHistoryOrders = activeOrders
+  const hostHistoryOrders = liveOrders
     .filter(order => ['DELIVERED', 'NOT_ACCEPTED', 'CANCELLED'].includes(order.stage))
     .sort(firstInFirstOut);
   const hostVisibleOrders = hostOrderTab === 'ACTIVE'
@@ -1471,36 +1668,64 @@ export default function App() {
           <div style={{ backgroundColor: '#fff', padding: '1.8rem', borderRadius: '10px', boxShadow: '0 2px 10px rgba(0,0,0,0.08)', marginBottom: '2rem' }}>
             <h2 style={{ color: '#6e1a3a', marginTop: 0 }}>🛠️ Developer Telemetry & Host Access</h2>
             <p style={{ fontSize: '0.9rem' }}>App Version: <strong>{CONFIG.version}</strong> | Active Orders in Engine: <strong>{activeOrders.length}</strong></p>
+            <p style={{ fontSize: '0.85rem', margin: '0.3rem 0 0.8rem' }}>
+              Screenshot reader (AI): <button type="button" onClick={() => void handleAcceptAiLicense()} style={{ cursor: 'pointer' }}>Accept AI model licence (one time)</button>
+            </p>
             
             <div style={{ backgroundColor: '#f9f9f9', padding: '1.2rem', borderRadius: '6px', margin: '1.5rem 0' }}>
               <h4 style={{ margin: '0 0 0.8rem' }}>{t.addHostHeader} (Max {CONFIG.maxHostLogins})</h4>
-              <form onSubmit={handleAddHost} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '0.6rem', alignItems: 'center' }}>
-                <input 
-                  type="email" 
-                  placeholder="Enter host Google account email"
-                  value={newHostEmail} 
-                  onChange={e => setNewHostEmail(e.target.value)} 
-                  required 
-                  style={{ flex: 1, padding: '0.6rem', border: '1px solid #ccc', borderRadius: '4px' }} 
-                />
-                <button type="submit" disabled={!grantHostAccess} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.6rem 1.2rem', borderRadius: '4px', cursor: grantHostAccess ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}>Add as host</button>
-                <label style={{ gridColumn: '1 / -1', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <input type="checkbox" checked={grantHostAccess} onChange={e => setGrantHostAccess(e.target.checked)} />
-                  Grant this Google account access to the Host view
-                </label>
+              <form onSubmit={handleAddHost} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.6rem', alignItems: 'center' }}>
+                <input aria-label="Host ID" placeholder="Host ID (e.g. H01)" value={newHostId} onChange={e => setNewHostId(e.target.value)} required maxLength={24} style={{ padding: '0.6rem', border: '1px solid #ccc', borderRadius: '4px' }} />
+                <input aria-label="Host Gmail" type="email" placeholder="Host Gmail" value={newHostEmail} onChange={e => setNewHostEmail(e.target.value)} required style={{ padding: '0.6rem', border: '1px solid #ccc', borderRadius: '4px' }} />
+                <input aria-label="Host nickname" placeholder="Nickname (shown on actions)" value={newHostNickname} onChange={e => setNewHostNickname(e.target.value)} required maxLength={30} style={{ padding: '0.6rem', border: '1px solid #ccc', borderRadius: '4px' }} />
+                <button type="submit" style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.6rem 1.2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Add host</button>
               </form>
-              <div style={{ marginTop: '1rem', display: 'grid', gap: '0.45rem' }}>
-                <strong>Host access</strong>
-                {authorizedHosts.map(email => {
-                  const fixedOwner = CONFIG.ownerEmails.some((owner: string) => owner.trim().toLowerCase() === email.toLowerCase());
-                  return (
-                    <label key={email} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                      <input type="checkbox" checked disabled={fixedOwner} onChange={event => void handleHostAccessToggle(email, event.target.checked)} />
-                      <span>{email}{fixedOwner ? ' (configured owner)' : ''}</span>
+              <div style={{ marginTop: '1rem', display: 'grid', gap: '0.5rem' }}>
+                <strong>Hosts</strong>
+                {hostRecords.map(host => (
+                  <div key={host.email} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.7rem', alignItems: 'center', padding: '0.5rem 0.7rem', background: '#fff', border: '1px solid #eee', borderRadius: '6px', opacity: host.active ? 1 : 0.6 }}>
+                    <label className="mr-switch" style={{ margin: 0 }} title={host.fixed ? 'Configured owner' : host.active ? 'Turn off' : 'Turn on'}>
+                      <input type="checkbox" checked={host.active} disabled={host.fixed} onChange={event => void handleHostActiveToggle(host, event.target.checked)} aria-label={`Access for ${host.nickname}`} />
+                      <span className="mr-switch-track" aria-hidden="true" />
                     </label>
-                  );
-                })}
+                    <span style={{ flex: '1 1 200px' }}><strong>{host.nickname}</strong> <code>{host.hostId || 'no ID'}</code><br /><small>{host.email}{host.fixed ? ' (configured owner)' : ''}{host.active ? '' : ' · switched off'}</small></span>
+                    {!host.fixed && <button type="button" onClick={() => void handleDeleteHost(host)} aria-label={`Delete ${host.nickname}`} style={{ background: '#fff', color: '#c62828', border: '1px solid #c62828', borderRadius: '4px', padding: '0.35rem 0.7rem', cursor: 'pointer' }}>Delete</button>}
+                  </div>
+                ))}
               </div>
+            </div>
+
+            <div style={{ backgroundColor: '#f9f9f9', padding: '1.2rem', borderRadius: '6px', margin: '1.5rem 0' }}>
+              <h4 style={{ margin: '0 0 0.8rem' }}>Audit trail (latest 100 actions)</h4>
+              {auditEntries.length === 0 ? <p style={{ margin: 0, color: '#666' }}>No actions recorded yet.</p> : (
+                <div style={{ overflowX: 'auto', maxHeight: '320px', overflowY: 'auto' }}>
+                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.8rem' }}>
+                    <thead><tr>{['When', 'Who', 'Action', 'Target', 'What'].map(label => <th key={label} style={{ textAlign: 'left', padding: '0.35rem 0.5rem', borderBottom: '2px solid #ddd', position: 'sticky', top: 0, background: '#f9f9f9' }}>{label}</th>)}</tr></thead>
+                    <tbody>
+                      {auditEntries.map(entry => (
+                        <tr key={entry.id}>
+                          <td style={{ padding: '0.3rem 0.5rem', borderBottom: '1px solid #eee', whiteSpace: 'nowrap' }}>{new Date(entry.at).toLocaleString('en-IN')}</td>
+                          <td style={{ padding: '0.3rem 0.5rem', borderBottom: '1px solid #eee', whiteSpace: 'nowrap' }}>{entry.actorNickname} <code>{entry.actorHostId}</code></td>
+                          <td style={{ padding: '0.3rem 0.5rem', borderBottom: '1px solid #eee' }}>{entry.action}</td>
+                          <td style={{ padding: '0.3rem 0.5rem', borderBottom: '1px solid #eee', fontFamily: 'monospace' }}>{entry.targetId}</td>
+                          <td style={{ padding: '0.3rem 0.5rem', borderBottom: '1px solid #eee' }}>{entry.summary}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div style={{ backgroundColor: '#f9f9f9', padding: '1.2rem', borderRadius: '6px', margin: '1.5rem 0' }}>
+              <h4 style={{ margin: '0 0 0.8rem' }}>Deleted order rows ({deletedOrders.length})</h4>
+              {deletedOrders.length === 0 ? <p style={{ margin: 0, color: '#666' }}>Nothing deleted.</p> : deletedOrders.map(order => (
+                <div key={order.orderId} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center', padding: '0.4rem 0', borderBottom: '1px solid #eee', fontSize: '0.85rem' }}>
+                  <span style={{ flex: '1 1 260px' }}><code>{order.orderId}</code> · {order.address?.fullName} · ₹{order.itemTotal}<br /><small>Deleted {order.deletedAt ? new Date(order.deletedAt).toLocaleString('en-IN') : ''} by {order.deletedBy || 'unknown'}{order.deleteReason ? `: ${order.deleteReason}` : ''}</small></span>
+                  <button type="button" onClick={() => void handleRestoreOrderRow(order)}>Restore</button>
+                  <button type="button" onClick={() => void handleDeleteOrderForever(order)} style={{ color: '#c62828' }}>Delete permanently</button>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -1632,6 +1857,24 @@ export default function App() {
               <p style={{ margin: '0.6rem 0 0', fontSize: '0.8rem', color: upiId ? '#1b5e20' : '#8a4b08' }}>{upiId ? `Dynamic QR is on for ${upiId}.` : 'Not set: customers see the uploaded QR.'}</p>
             </div>
 
+            <div style={{ backgroundColor: '#fff', padding: '1.2rem', border: '1px solid #ddd', borderRadius: '8px', marginBottom: '2rem' }}>
+              <h3 style={{ margin: '0 0 0.6rem' }}>Courier charge rules</h3>
+              <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', margin: '0.4rem 0' }}>
+                <input type="checkbox" checked={shippingConfig.ruleBEnabled} onChange={event => setShippingConfig({ ...shippingConfig, ruleBEnabled: event.target.checked })} />
+                <span><strong>Rule B:</strong> no courier charge for deliveries inside Bangalore.</span>
+              </label>
+              <label style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', margin: '0.4rem 0 0.4rem 1.6rem', fontSize: '0.9rem' }}>
+                Pincode prefixes
+                <input value={prefixDraft} onChange={event => setPrefixDraft(event.target.value)} placeholder="560" style={{ padding: '0.4rem', width: '220px' }} />
+              </label>
+              <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', margin: '0.4rem 0' }}>
+                <input type="checkbox" checked={shippingConfig.ruleAEnabled} onChange={event => setShippingConfig({ ...shippingConfig, ruleAEnabled: event.target.checked })} />
+                <span><strong>Rule A:</strong> no courier charge for a single saree (quantity 1), unless the same customer already ordered to the same pincode in the last 24 hours.</span>
+              </label>
+              <p style={{ margin: '0.4rem 0', fontSize: '0.85rem', color: '#666' }}><strong>Rule C</strong> applies to everything else: you add the courier details and charge, the customer pays it, and you verify it before dispatch.</p>
+              <button type="button" onClick={() => void handleSaveShipping()} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save courier rules</button>
+            </div>
+
             </>)}
             {hostTab === 'ENQUIRIES' && (<>
             {/* Customer enquiries */}
@@ -1737,7 +1980,7 @@ export default function App() {
                     <strong>{ord.address.fullName}</strong> · {ord.address.phone}<br />
                     {ord.items.map(item => `${item.name} × ${item.quantity}`).join(', ')}<br />
                     {getOrderStatus(ord)}{ord.itemPayment?.utr ? ` · UTR ${ord.itemPayment.utr}` : ''}<br />
-                    {[ord.address.city, ord.address.district, ord.address.pincode].filter(Boolean).join(', ')}
+                    {[ord.address.city, ord.address.district, ord.address.state, ord.address.pincode, ord.address.country].filter(Boolean).join(', ')}
                   </div>
                   <button type="button" className="mr-order-head" aria-expanded={open} onClick={() => toggleOrder(ord.orderId)}>
                     <span style={{ minWidth: 0 }}><span className="mr-order-label">Customer</span><div className="mr-order-value">{ord.address.fullName}</div></span>
@@ -1767,7 +2010,7 @@ export default function App() {
                   <div style={{ margin: '0.6rem 0', padding: '0.75rem', background: '#f7f2ef', borderRadius: '5px' }}>
                     <strong>Delivery address</strong>
                     <p style={{ margin: '0.35rem 0' }}>
-                      {[ord.address.houseNameOrNumber, ord.address.street1, ord.address.street2, ord.address.landmark1, ord.address.landmark2, ord.address.city, ord.address.taluk, ord.address.district, ord.address.pincode].filter(Boolean).join(', ') || ord.address.street}
+                      {[ord.address.houseNameOrNumber, ord.address.street1, ord.address.street2, ord.address.landmark1, ord.address.landmark2, ord.address.city, ord.address.taluk, ord.address.district, ord.address.state, ord.address.pincode, ord.address.country].filter(Boolean).join(', ') || ord.address.street}
                     </p>
                     {ord.address.pincodeCheck && <p style={{ margin: '0.25rem 0', fontSize: '0.85rem' }}>{ord.address.pincodeCheck.provider}: {ord.address.pincodeCheck.message}</p>}
                     {ord.deliveryConfirmed ? (
@@ -1805,10 +2048,31 @@ export default function App() {
                       )}
                     </div>
                   )}
-                  {hostOrderTab === 'ACTIVE' && <CourierBillForm key={`${ord.orderId}-${ord.courierBill?.billId || 'new'}`} order={ord} onSave={handleCourierReceipt} />}
+                  {ord.courierRule && (() => {
+                    const recheck = evaluateCourierRules({
+                      items: ord.items.map(item => ({ quantity: item.quantity })),
+                      pincode: ord.address.pincode || '',
+                      userId: ord.userId,
+                      recentOrders: liveOrders.filter(other => other.orderId !== ord.orderId && other.createdAt < ord.createdAt),
+                      config: shippingConfig,
+                      now: Date.parse(ord.createdAt),
+                    });
+                    const mismatch = Boolean(ord.courierWaived) && !recheck.waived;
+                    return (
+                      <p style={{ margin: '0.5rem 0', fontSize: '0.85rem', color: mismatch ? '#8b1e2d' : '#1b5e20', fontWeight: 'bold' }}>
+                        Courier rule {ord.courierRule}: {ord.courierWaived ? 'charge waived' : 'standard charge'}. {ord.courierRuleReason}
+                        {mismatch && ` Check failed: ${recheck.reason} Add a courier charge below if it applies.`}
+                      </p>
+                    );
+                  })()}
+                  {hostOrderTab === 'ACTIVE' && (!ord.courierWaived || ord.courierBill || forceCourier[ord.orderId]) && <CourierBillForm key={`${ord.orderId}-${ord.courierBill?.billId || 'new'}`} order={ord} onSave={handleCourierReceipt} />}
+                  {hostOrderTab === 'ACTIVE' && ord.courierWaived && !ord.courierBill && !forceCourier[ord.orderId] && (
+                    <button type="button" onClick={() => setForceCourier(current => ({ ...current, [ord.orderId]: true }))} style={{ margin: '0.4rem 0', cursor: 'pointer' }}>Add a courier charge anyway</button>
+                  )}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.8rem' }}>
                     {hostOrderTab === 'ACTIVE' && <button type="button" disabled={!canDispatch} onClick={() => void handleDispatch(ord.orderId)} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.45rem 0.8rem', borderRadius: '4px', cursor: canDispatch ? 'pointer' : 'not-allowed' }}>{t.markDispatched}</button>}
                     {hostOrderTab === 'DISPATCHED' && <button type="button" onClick={() => void handleDelivered(ord.orderId)} style={{ backgroundColor: '#2e7d32', color: '#fff', border: 'none', padding: '0.45rem 0.8rem', borderRadius: '4px', cursor: 'pointer' }}>Mark delivered</button>}
+                    {hostOrderTab === 'HISTORY' && <button type="button" onClick={() => void handleDeleteOrderRow(ord)} style={{ backgroundColor: '#fff', color: '#c62828', border: '1px solid #c62828', padding: '0.45rem 0.8rem', borderRadius: '4px', cursor: 'pointer' }}>Delete row</button>}
                   </div>
                   <Suspense fallback={<LazyFallback />}><HostOrderActions key={`${ord.orderId}-${ord.hostMessageAt || 'new'}`} order={ord} canReject={hostOrderTab === 'ACTIVE'} onReject={handleRejectOrder} onHold={handleHoldOrder} onRelease={handleReleaseOrder} onSaveMessage={handleSaveOrderMessage} /></Suspense>
                   </div>
@@ -1819,7 +2083,7 @@ export default function App() {
             </>)}
 
             {hostTab === 'LEDGER' && (
-              <Suspense fallback={<LazyFallback />}><MasterLedger orders={activeOrders} products={products} onSaveDelivery={handleUpdateDelivery} /></Suspense>
+              <Suspense fallback={<LazyFallback />}><MasterLedger orders={liveOrders} products={products} onSaveDelivery={handleUpdateDelivery} onDeleteRow={handleDeleteOrderRow} /></Suspense>
             )}
 
             {hostTab === 'FEEDBACK' && (
@@ -1891,7 +2155,7 @@ export default function App() {
                     <article key={saved.id} style={{ backgroundColor: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '0.9rem' }}>
                       <strong>{saved.fullName} · {saved.phone}</strong>
                       <p style={{ margin: '0.35rem 0', color: '#555' }}>
-                        {[saved.houseNameOrNumber, saved.street1, saved.street2, saved.landmark1, saved.landmark2, saved.city, saved.taluk, saved.district, saved.pincode].filter(Boolean).join(', ')}
+                        {[saved.houseNameOrNumber, saved.street1, saved.street2, saved.landmark1, saved.landmark2, saved.city, saved.taluk, saved.district, saved.state, saved.pincode, saved.country].filter(Boolean).join(', ')}
                       </p>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                         <button type="button" onClick={() => { selectDeliveryAddress(saved.id); setCustomerTab('SHOP'); setIsCheckoutOpen(true); setCheckoutStep(1); }} style={{ padding: '0.45rem 0.7rem' }}>{tr('Use at checkout')}</button>
@@ -1907,7 +2171,7 @@ export default function App() {
                   <button type="submit" style={{ justifySelf: 'start', backgroundColor: '#6e1a3a', color: '#fff', border: 0, borderRadius: '4px', padding: '0.6rem 0.9rem', cursor: 'pointer' }}>
                     {editingAddressId ? tr('Save address changes') : tr('Save address')}
                   </button>
-                  {editingAddressId && <button type="button" onClick={() => { setEditingAddressId(null); setAddress({ fullName: '', phone: '', houseNameOrNumber: '', street1: '', street2: '', street: '', landmark1: '', landmark2: '', taluk: '', district: '', pincode: '', consentTimestamp: '' }); }} style={{ justifySelf: 'start' }}>{tr('Cancel editing')}</button>}
+                  {editingAddressId && <button type="button" onClick={() => { setEditingAddressId(null); setAddress({ fullName: '', phone: '', houseNameOrNumber: '', street1: '', street2: '', street: '', landmark1: '', landmark2: '', taluk: '', district: '', state: '', country: 'India', pincode: '', consentTimestamp: '' }); }} style={{ justifySelf: 'start' }}>{tr('Cancel editing')}</button>}
                 </form>
               </section>
             )}
@@ -2121,7 +2385,12 @@ export default function App() {
                   {/* Courier Policy Notice */}
                   <div style={{ backgroundColor: '#fff8e7', borderLeft: '4px solid #d97706', padding: '0.8rem', borderRadius: '4px', marginBottom: '1.2rem', fontSize: '0.85rem' }}>
                     <strong style={{ color: '#92400e' }}>{t.courierNoticeTitle}</strong>
-                    <p style={{ margin: '0.3rem 0 0.5rem' }}>{t.courierNoticeBody}</p>
+                    {courierDecision.waived
+                      ? <p role="status" style={{ margin: '0.3rem 0 0.5rem', color: '#1b5e20', fontWeight: 'bold' }}>{tr(courierDecision.reason)}</p>
+                      : <>
+                        <p style={{ margin: '0.3rem 0 0.5rem' }}>{t.courierNoticeBody}</p>
+                        {normalizePincode(address.pincode) && <p role="status" style={{ margin: '0 0 0.5rem' }}>{tr(courierDecision.reason)}</p>}
+                      </>}
                     <label style={{ fontWeight: 'bold', cursor: 'pointer' }}>
                       <input type="checkbox" checked={courierPolicyAccepted} onChange={(e) => setCourierPolicyAccepted(e.target.checked)} /> {t.acceptCourierNotice}
                     </label>
@@ -2146,7 +2415,7 @@ export default function App() {
                                 {savedAddresses.map(saved => <option key={saved.id} value={saved.id}>{saved.fullName} · {saved.street1} · {saved.pincode}</option>)}
                               </select>
                               <p style={{ margin: 0, color: '#555', fontSize: '0.85rem' }}>
-                                {[address.houseNameOrNumber, address.street1, address.street2, address.landmark1, address.landmark2, address.city, address.taluk, address.district, address.pincode].filter(Boolean).join(', ')}
+                                {[address.houseNameOrNumber, address.street1, address.street2, address.landmark1, address.landmark2, address.city, address.taluk, address.district, address.state, address.pincode, address.country].filter(Boolean).join(', ')}
                               </p>
                               <button type="button" disabled={isCheckingPincode || address.pincode.length !== 6} onClick={() => void handleCheckPincode()}>
                                 {isCheckingPincode ? tr('Checking pincode...') : tr('Check selected pincode online')}
@@ -2166,7 +2435,7 @@ export default function App() {
                       <p style={{ color: '#666', fontSize: '0.8rem' }}>{tr('Delivery address only. The host will confirm courier serviceability before accepting payment.')}</p>
                       <button
                         onClick={() => setCheckoutStep(2)}
-                        disabled={!address.pincodeCheck || ['NOT_FOUND', 'NOT_SERVICEABLE'].includes(address.pincodeCheck.status) || (useSavedAddress ? !selectedAddressId : !address.fullName || !address.phone || !address.street1 || !address.city || !address.landmark1 || !address.district || !/^\d{6}$/.test(address.pincode))}
+                        disabled={!address.pincodeCheck || ['NOT_FOUND', 'NOT_SERVICEABLE'].includes(address.pincodeCheck.status) || (useSavedAddress ? !selectedAddressId : !isAddressComplete(address))}
                         style={{ marginTop: '1.2rem', backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}
                       >{tr('Next: Item Payment')}</button>
                     </div>
@@ -2267,7 +2536,7 @@ export default function App() {
                       <strong>{tr('Delivery address submitted')}</strong>
                       <p style={{ margin: '0.35rem 0' }}>{ord.address.fullName} · {ord.address.phone}</p>
                       <p style={{ margin: '0.35rem 0' }}>
-                        {[ord.address.houseNameOrNumber, ord.address.street1, ord.address.street2, ord.address.landmark1, ord.address.landmark2, ord.address.city, ord.address.taluk, ord.address.district, ord.address.pincode].filter(Boolean).join(', ') || ord.address.street}
+                        {[ord.address.houseNameOrNumber, ord.address.street1, ord.address.street2, ord.address.landmark1, ord.address.landmark2, ord.address.city, ord.address.taluk, ord.address.district, ord.address.state, ord.address.pincode, ord.address.country].filter(Boolean).join(', ') || ord.address.street}
                       </p>
                       <p role="status" style={{ margin: '0.35rem 0', color: ord.deliveryConfirmed ? '#1b5e20' : '#8a4b08' }}>
                         {ord.deliveryConfirmed ? `Host confirmed deliverable${ord.deliveryConfirmedAt ? ` · ${new Date(ord.deliveryConfirmedAt).toLocaleString()}` : ''}` : tr('Waiting for host to confirm delivery serviceability')}
@@ -2395,9 +2664,10 @@ export default function App() {
           title={acceptDialog.title}
           details={acceptDialog.details}
           confirmLabel={acceptDialog.confirmLabel}
-          tone="accept"
-          onCancel={() => closeAcceptDialog(false)}
-          onConfirm={() => closeAcceptDialog(true)}
+          tone={acceptDialog.tone}
+          reasons={acceptDialog.reasons}
+          onCancel={() => closeAcceptDialog(null)}
+          onConfirm={result => closeAcceptDialog(result)}
         />
       )}
     </div>

@@ -32,3 +32,15 @@ sign in, place a test order, and check the browser console. When there are no vi
 ## Free-tier reads
 Customers load products, categories and settings through a 10-minute browser cache
 (`src/domain/cache.ts`), so repeat visits cost no Firestore reads. Staff keep live updates.
+
+## Server side (Cloudflare Worker): added in Part 2
+`wrangler.jsonc` now also deploys `worker/index.ts`, a small server that runs next to the website on the same address.
+It handles `/api/*` requests; everything else is served from `dist` as before. No extra project is needed.
+
+1. **Nothing to install.** The next push builds and deploys it, the same way as the website.
+2. **Workers AI.** The screenshot reader uses Cloudflare's free Workers AI allowance (the `ai` binding in `wrangler.jsonc`). It needs no key.
+3. **One-time licence.** After the first deploy, sign in as developer, open the Developer panel and press
+   "Accept AI model licence (one time)". The vision model needs this before its first use.
+4. **If you change `FIREBASE_PROJECT_ID` or `DEVELOPER_EMAILS`**, edit them under `vars` in `wrangler.jsonc`.
+5. **If the server part fails**, checkout still works: the app falls back to the reader in the browser, then to typing the UTR.
+6. Secrets for later services (email, WhatsApp) go under Settings, Variables and secrets, as *secrets* (not build variables).

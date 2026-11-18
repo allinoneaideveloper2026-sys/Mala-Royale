@@ -23,3 +23,10 @@ Checkout and the courier payment form require a payment screenshot. The 12-digit
 - A held order cannot move to the next stage until released. Reject is still possible while on hold.
 - Customers see an "Updates on your orders" banner when an order changes since they last looked, and a hold box with the reason. The host has a "Notify customer on WhatsApp" button with the text ready.
 - No automatic push, email or SMS is sent. That needs a server and a messaging service.
+
+## Part 2, batch 1
+- Worker + AI screenshot reader (UTR, amount, date, time, success/failed) with browser fallback.
+- Host management: Host ID, Gmail, nickname, on/off switch, delete. Audit trail with nickname/ID and server time.
+- Delete Row in Order History and Master Ledger (hidden, restorable by the developer; permanent delete is developer only).
+- Courier rules A, B, C with host settings and a re-check on the host side.
+Still to come: item IDs and colour variants, partial item rejection, Kuchu catalogue, notifications.

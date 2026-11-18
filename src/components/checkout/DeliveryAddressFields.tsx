@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useTr } from '../../lang/ui';
 import { CustomerAddress } from '../../domain/types';
 
@@ -25,8 +25,18 @@ export default function DeliveryAddressFields({
     { key: 'city', label: tr('City'), required: true },
     { key: 'taluk', label: tr('Taluk [optional]') },
     { key: 'district', label: tr('District'), required: true },
+    { key: 'state', label: tr('State'), required: true },
+    { key: 'country', label: tr('Country'), required: true },
     { key: 'pincode', label: tr('Pincode'), required: true, numeric: true },
   ];
+
+  // As soon as a 6-digit pincode is typed, look it up and fill State, District and Country. The customer can still change them.
+  useEffect(() => {
+    if (/^\d{6}$/.test(address.pincode) && !address.pincodeCheck && !isCheckingPincode) onCheckPincode();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address.pincode, address.pincodeCheck]);
+
+  const lookupFailed = address.pincodeCheck && ['UNAVAILABLE', 'NOT_FOUND'].includes(address.pincodeCheck.status);
 
   return (
     <>
@@ -50,6 +60,7 @@ export default function DeliveryAddressFields({
           </label>
         ))}
       </div>
+      {lookupFailed && <p role="status" style={{ margin: 0, color: '#8a4b08', fontSize: '0.85rem' }}>{tr('We could not fill the State and Country from this pincode. Please type them yourself.')}</p>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
         <button type="button" disabled={isCheckingPincode || address.pincode.length !== 6} onClick={onCheckPincode} style={{ padding: '0.55rem 0.8rem' }}>
           {isCheckingPincode ? tr('Checking pincode...') : tr('Check pincode online')}

@@ -170,3 +170,82 @@ describe('order updates for customers', () => {
     expect(orderUpdateKey(base)).toBe(before);
   });
 });
+
+import { buildVerdict, parseModelJson, sanitizeReading } from '../src/domain/proofVerdict';
+
+describe('AI screenshot reading (server side logic)', () => {
+  const nowMs = Date.UTC(2026, 10, 17, 5, 20); // 10:50 India time
+  it('parses the model answer even with extra words around it', () => {
+    const raw = parseModelJson('Here you go: {"status":"success","amount":"₹3,500","utr":"4321 1234 5678","date":"2026-11-17","time":"10:42"} thanks');
+    const reading = sanitizeReading(raw);
+    expect(reading.utr).toBe('432112345678');
+    expect(reading.amount).toBe(3500);
+    expect(reading.paymentStatus).toBe('success');
+  });
+  it('never accepts a UTR that is not 12 digits', () => {
+    expect(sanitizeReading({ utr: '12345' }).utr).toBe('');
+    expect(sanitizeReading(null).paymentStatus).toBe('unknown');
+  });
+  it('matches the exact amount and a recent India-time payment', () => {
+    const verdict = buildVerdict(sanitizeReading({ amount: 3500, date: '2026-11-17', time: '10:42', status: 'success' }), 3500, nowMs);
+    expect(verdict.amountStatus).toBe('match');
+    expect(verdict.timeStatus).toBe('fresh');
+  });
+  it('flags a different amount, an old payment, and a failed payment', () => {
+    expect(buildVerdict(sanitizeReading({ amount: 2500 }), 3500, nowMs).amountStatus).toBe('mismatch');
+    expect(buildVerdict(sanitizeReading({ amount: 3500, date: '2026-11-17', time: '08:00' }), 3500, nowMs).timeStatus).toBe('stale');
+    expect(sanitizeReading({ status: 'Payment failed' }).paymentStatus).toBe('failed');
+  });
+});
+
+import { DEFAULT_SHIPPING, evaluateCourierRules, normalizePincode, parsePrefixes } from '../src/domain/shipping';
+
+describe('courier charge rules', () => {
+  const now = Date.UTC(2026, 10, 17, 10, 0);
+  const prior = (hoursAgo: number, over: any = {}) => ({ userId: 'u1', stage: 'ORDER_RECEIVED', createdAt: new Date(now - hoursAgo * 3600000).toISOString(), address: { pincode: '580020' }, ...over }) as any;
+  const base = { items: [{ quantity: 1 }], pincode: '580020', userId: 'u1', recentOrders: [] as any[], config: DEFAULT_SHIPPING, now };
+
+  it('Rule A waives a single saree', () => {
+    expect(evaluateCourierRules(base)).toEqual({ rule: 'A', waived: true, reason: 'Single saree: no courier charge.' });
+  });
+  it('Rule A falls back to C when the same customer ordered to the same pincode within 24 hours', () => {
+    const decision = evaluateCourierRules({ ...base, recentOrders: [prior(5)] });
+    expect(decision.rule).toBe('C');
+    expect(decision.waived).toBe(false);
+  });
+  it('ignores cancelled orders, other pincodes, other customers and orders older than 24 hours', () => {
+    expect(evaluateCourierRules({ ...base, recentOrders: [prior(5, { stage: 'NOT_ACCEPTED' })] }).rule).toBe('A');
+    expect(evaluateCourierRules({ ...base, recentOrders: [prior(5, { address: { pincode: '580021' } })] }).rule).toBe('A');
+    expect(evaluateCourierRules({ ...base, recentOrders: [prior(5, { userId: 'u2' })] }).rule).toBe('A');
+    expect(evaluateCourierRules({ ...base, recentOrders: [prior(25)] }).rule).toBe('A');
+  });
+  it('Rule B waives Bangalore even when Rule A would not apply', () => {
+    const decision = evaluateCourierRules({ ...base, items: [{ quantity: 1 }, { quantity: 2 }], pincode: '560001', recentOrders: [prior(2, { address: { pincode: '560001' } })] });
+    expect(decision.rule).toBe('B');
+    expect(decision.waived).toBe(true);
+  });
+  it('Rule C applies to several items outside Bangalore, and when rules are switched off', () => {
+    expect(evaluateCourierRules({ ...base, items: [{ quantity: 2 }] }).rule).toBe('C');
+    expect(evaluateCourierRules({ ...base, config: { ...DEFAULT_SHIPPING, ruleAEnabled: false } }).rule).toBe('C');
+    expect(evaluateCourierRules({ ...base, pincode: '12' }).rule).toBe('C');
+  });
+  it('normalizes pincodes and prefix lists', () => {
+    expect(normalizePincode(' 560 001 ')).toBe('560001');
+    expect(normalizePincode('5600')).toBe('');
+    expect(parsePrefixes('560, 561 ; abc 562')).toEqual(['560', '561', '562']);
+  });
+});
+
+import { isAddressComplete, missingAddressFields } from '../src/domain/address';
+
+describe('delivery address needs state and country', () => {
+  const full = { fullName: 'Asha', phone: '9876543210', street1: '12 MG Road', landmark1: 'Temple', city: 'Hubballi', district: 'Dharwad', state: 'Karnataka', country: 'India', pincode: '580020' } as any;
+  it('is complete when everything is filled', () => {
+    expect(isAddressComplete(full)).toBe(true);
+  });
+  it('lists a missing state or country', () => {
+    expect(missingAddressFields({ ...full, state: '' })).toEqual(['state']);
+    expect(missingAddressFields({ ...full, country: ' ' })).toEqual(['country']);
+    expect(missingAddressFields({ ...full, pincode: '58002' })).toEqual(['pincode']);
+  });
+});

@@ -1,9 +1,17 @@
 {
-  // Cloudflare static hosting config. The site is the built files in ./dist.
+  // Cloudflare config: the website files in ./dist plus a small Worker (worker/index.ts) that handles /api/* requests.
   "name": "mala-royale-optimized",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-11-01",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "ai": { "binding": "AI" },
+  "vars": {
+    "FIREBASE_PROJECT_ID": "mala-royale",
+    "DEVELOPER_EMAILS": "allinoneaideveloper2026@gmail.com"
   }
 }

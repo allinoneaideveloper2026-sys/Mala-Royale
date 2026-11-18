@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { classifyAmount, classifyPaymentTime, classifyUtrSource, extractUtr, isProofUrl, readPaymentTime, type TimeStatus, type UtrSource } from '../../domain/paymentProof';
-import { readScreenshotText } from '../../app/readScreenshot';
+import { classifyUtrSource, isProofUrl, type TimeStatus, type UtrSource } from '../../domain/paymentProof';
+import { readPaymentProof } from '../../app/readProof';
 
 export interface ProofCheck {
   utrSource: UtrSource;
@@ -65,28 +65,26 @@ export function PaymentProofCapture({
     if (!file) return undefined;
     setReading(true);
     setProgress(0);
-    readScreenshotText(file, fraction => { if (!cancelled) setProgress(fraction); })
-      .then(text => {
+    readPaymentProof(file, expectedAmount, fraction => { if (!cancelled) setProgress(fraction); })
+      .then(result => {
         if (cancelled) return;
-        const foundUtr = extractUtr(text);
-        setReadUtr(foundUtr);
-        const amount = classifyAmount(text, expectedAmount);
-        setAmountFound(amount.status === 'match');
-        const paid = readPaymentTime(text);
-        const status = classifyPaymentTime(paid);
-        setTimeStatus(status);
-        setPaidAt(paid ? paid.date.toISOString() : '');
-        const paidText = paid ? paid.date.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', ...(paid.hasTime ? { hour: '2-digit', minute: '2-digit' } : {}) }) : '';
-        if (amount.status === 'mismatch') {
-          setBlocking(`This screenshot shows ₹${amount.seen.join(', ₹')}, but your order total (after offers) is ₹${expectedAmount}. Please pay exactly ₹${expectedAmount} and attach that screenshot. If you believe this is a mistake, use "Report a problem" on your order or message us.`);
-        } else if (amount.status === 'notfound') {
+        setReadUtr(result.utr);
+        setAmountFound(result.amountStatus === 'match');
+        setTimeStatus(result.timeStatus);
+        setPaidAt(result.paidAtIso);
+        const paidText = result.paidAtIso ? new Date(result.paidAtIso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+        if (result.paymentStatus === 'failed' || result.paymentStatus === 'pending') {
+          setBlocking(`This screenshot shows a payment that is ${result.paymentStatus === 'failed' ? 'not successful' : 'still pending'}. Please wait until the payment succeeds, then attach the final screenshot.`);
+        } else if (result.amountStatus === 'mismatch') {
+          setBlocking(`This screenshot shows ₹${result.seen.join(', ₹')}, but your order total (after offers) is ₹${expectedAmount}. Please pay exactly ₹${expectedAmount} and attach that screenshot. If you believe this is a mistake, use "Report a problem" on your order or message us.`);
+        } else if (result.amountStatus === 'notfound') {
           setBlocking(`We could not find ₹${expectedAmount} in this screenshot. Please attach a clear screenshot of your payment of exactly ₹${expectedAmount}.`);
-        } else if (status === 'stale') {
+        } else if (result.timeStatus === 'stale') {
           setBlocking(`This screenshot shows a payment made on ${paidText}, which is not recent. Please attach the screenshot of the payment you just made.`);
-        } else if (status === 'future') {
+        } else if (result.timeStatus === 'future') {
           setBlocking(`This screenshot shows a payment time (${paidText}) that is in the future. Please attach the screenshot of the payment you just made.`);
         }
-        if (foundUtr) onUtr(foundUtr);
+        if (result.utr) onUtr(result.utr);
         else setNote('We could not read the UTR from this screenshot. Please type the 12-digit UTR shown in your payment app.');
       })
       .catch(() => {

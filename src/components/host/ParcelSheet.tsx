@@ -11,7 +11,7 @@ export function customerParcelParty(address: CustomerAddress): ParcelParty {
     city: address.city || address.taluk || '',
     state: address.state || address.district || '',
     pincode: address.pincode,
-    country: 'India',
+    country: address.country || 'India',
   };
 }
 
