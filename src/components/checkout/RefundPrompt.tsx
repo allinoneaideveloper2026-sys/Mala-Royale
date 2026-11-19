@@ -24,11 +24,13 @@ export default function RefundPrompt({
   const [value, setValue] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const partial = order.stage !== 'NOT_ACCEPTED';
+  const refundAmount = partial ? (order.refundDue || 0) : order.itemTotal;
 
   if (order.refundDetails) {
     return (
       <div role="status" style={{ margin: '0.7rem 0', padding: '0.7rem', background: '#e8f5e9', border: '1px solid #a5d6a7', borderRadius: '8px', fontSize: '0.9rem' }}>
-        <strong>Refund details received.</strong> We will refund ₹{order.itemTotal} to your {describeRefund(order)}.
+        <strong>Refund details received.</strong> We will refund ₹{refundAmount} to your {describeRefund(order)}.
       </div>
     );
   }
@@ -53,8 +55,8 @@ export default function RefundPrompt({
 
   return (
     <form onSubmit={submit} style={{ margin: '0.7rem 0', padding: '0.8rem', background: '#fdecea', border: '1px solid #f5b5bd', borderRadius: '8px', display: 'grid', gap: '0.5rem' }}>
-      <strong style={{ color: '#8b1e2d' }}>Your order was cancelled{order.rejectionReason ? `: ${order.rejectionReason}` : ''}</strong>
-      <span style={{ fontSize: '0.88rem' }}>To refund ₹{order.itemTotal}, tell us where to send it.</span>
+      <strong style={{ color: '#8b1e2d' }}>{partial ? 'Some items in your order were rejected' : `Your order was cancelled${order.rejectionReason ? `: ${order.rejectionReason}` : ''}`}</strong>
+      <span style={{ fontSize: '0.88rem' }}>To refund ₹{refundAmount}, tell us where to send it.</span>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', fontSize: '0.9rem' }}>
         {(Object.keys(METHOD_LABELS) as Array<keyof typeof METHOD_LABELS>).map(option => (
           <label key={option} style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>

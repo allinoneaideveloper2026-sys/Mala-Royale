@@ -14,11 +14,16 @@ export function customerUpdateText(order: Order): string {
     if (order.rejectionNote) lines.push(order.rejectionNote);
     lines.push('Please open your order on our website and share your UPI ID or UPI phone number for the refund.');
   }
+  const rejectedLines = (order.items || []).filter(item => item.status === 'REJECTED');
+  if (rejectedLines.length > 0 && order.stage !== 'NOT_ACCEPTED') {
+    lines.push(`Some items were rejected: ${rejectedLines.map(item => `${item.name}${item.color ? ` (${item.color})` : ''} - ${item.rejectionReason || 'no reason given'}`).join('; ')}.`);
+    if (order.refundDue) lines.push(`We will refund ₹${order.refundDue}. Please open your order on our website and share your UPI ID or UPI phone number.`);
+  }
   if (order.hostMessage) lines.push(order.hostMessage);
   return lines.join('\n');
 }
 
 /** A short fingerprint of what the customer would see for this order. When it changes, the customer has an update. */
 export function orderUpdateKey(order: Order): string {
-  return [getOrderStatus(order), order.hostMessageAt || '', order.heldAt || '', order.refundDetails ? 'refund' : ''].join('|');
+  return [getOrderStatus(order), order.hostMessageAt || '', order.heldAt || '', order.refundDetails ? 'refund' : '', order.rejectedTotal || 0].join('|');
 }

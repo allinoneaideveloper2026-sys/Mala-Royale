@@ -18,7 +18,7 @@ service cloud.firestore {
     }
 
     function ownerEmails() {
-      return ['allinoneaideveloper2026@gmail.com'];
+      return ['owner@malaroyale.com'];
     }
 
     function isDeveloper() {
@@ -39,6 +39,20 @@ service cloud.firestore {
 
     function isStaff() {
       return isDeveloper() || isOwner();
+    }
+
+    // Kuchu designs that sarees can be tagged with. Everyone can read; only staff can change.
+    match /kuchu/{kuchuId} {
+      allow read: if true;
+      allow create, update: if isStaff()
+        && request.resource.data.keys().hasOnly(['id', 'name', 'price', 'photos', 'active', 'createdAt'])
+        && request.resource.data.id == kuchuId
+        && kuchuId.matches('^[A-Z0-9]{2,12}$')
+        && request.resource.data.name is string && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 60
+        && request.resource.data.price is number && request.resource.data.price > 0 && request.resource.data.price <= 100000
+        && request.resource.data.photos is list && request.resource.data.photos.size() <= 8
+        && request.resource.data.active is bool;
+      allow delete: if isStaff();
     }
 
     match /products/{productId} {
@@ -98,7 +112,7 @@ service cloud.firestore {
         // After the host cancels an order, the customer may add where the refund should go (once).
         hasSession()
         && resource.data.userId == request.auth.uid
-        && resource.data.stage == 'NOT_ACCEPTED'
+        && (resource.data.stage == 'NOT_ACCEPTED' || resource.data.get('refundDue', 0) > 0)
         && resource.data.get('refundDetails', null) == null
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['refundDetails', 'updatedAt'])
         && request.resource.data.refundDetails.keys().hasOnly(['method', 'value', 'submittedAt'])
@@ -188,6 +202,19 @@ service cloud.firestore {
         && request.resource.data.get('nickname', '') is string
         && request.resource.data.get('nickname', '').size() <= 30;
       allow delete: if isDeveloper();
+    }
+
+    // One record per order and message type, so a customer is never sent the same message twice.
+    // The Worker creates it with the caller's own token, so these rules apply.
+    match /notificationLog/{entryId} {
+      allow create: if isStaff()
+        || (signedIn()
+          && request.resource.data.event == 'ORDER_PLACED'
+          && request.resource.data.orderId is string
+          && entryId == request.resource.data.orderId + '_ORDER_PLACED'
+          && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.userId == request.auth.uid);
+      allow read: if isStaff();
+      allow update, delete: if false;
     }
 
     // Who did what, and when. Anyone on the staff can add an entry about their own action; nobody can change or remove one.

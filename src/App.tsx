@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, Suspense, lazy } from 'rea
 import { GoogleAuthProvider, linkWithPopup, onAuthStateChanged, signInAnonymously, signInWithCredential, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { CONFIG } from './config';
 import { LANGUAGES, LANGUAGE_STORAGE_KEY, TrContext, buildStrings, isUiLanguage, makeTr, type UiLanguage } from './lang/ui';
-import { UserRole, Product, ProductStatus, Enquiry, Feedback, Order, CourierBill, CustomerAddress, ParcelDetails, ParcelParty, SavedDeliveryAddress, HostRecord, AuditEntry } from './domain/types';
+import { UserRole, Product, ProductStatus, Enquiry, Feedback, Order, CourierBill, CustomerAddress, ParcelDetails, ParcelParty, SavedDeliveryAddress, HostRecord, AuditEntry, KuchuDesign } from './domain/types';
 import { globalOrderBook } from './domain/OrderBook';
 import { auth, firebaseConfigured } from './firebase';
 import AIOfferBannerContainer from './components/AIOfferBanner/AIOfferBannerContainer';
@@ -15,6 +15,12 @@ import AboutSection, { type FeedbackResult } from './components/storefront/About
 import { HowItWorks, OrderTimeline, StoryShowcase, ValueStrip } from './components/storefront/StorefrontSections';
 import { productCreatedMs } from './analytics/orderMetrics';
 import { isAddressComplete } from './domain/address';
+import { notifyOrder, describeNotify } from './app/notifyClient';
+import { isEmail, newConsent, type NotifyEvent } from './domain/notifications';
+import { PALETTE, buildItemCode, categoryCodeFor, colorCodeFor, designKeyFor, groupVariants, isValidItemCode, itemCodeTaken, type PaletteColor } from './domain/itemCode';
+import { acceptedTotal, activeLines, isLineRejected } from './domain/orderItems';
+import OrderLines from './components/orders/OrderLines';
+import { colorsFromPhoto } from './app/photoColors';
 import { saveShippingConfig, subscribeShippingConfig, holdCloudOrder, releaseCloudOrderHold, saveUpiSettings, uploadPaymentProof, cacheProducts, refreshProductsFresh, fetchCheckoutQrFresh, resetAiMemory, submitRefundDetails, attachCloudCourierBill, checkDeliveryPincode, createCloudOrder, confirmCloudOrderDelivery, deleteCloudDeliveryAddress, deleteEnquiry, deleteFeedback, deleteProduct, isAuthorizedHost, isConfiguredDeveloper, isConfiguredOwner, markCloudOrderNotAccepted, markCloudOrderDelivered, publishProduct, saveCloudDeliveryAddress, saveAiMemory, saveCategories, saveCloudParcelDetails, saveContactSettings, saveOrderMessage, setEnquiryStatus, setFeedbackStatus, subscribeAiMemory, subscribeCategories, subscribeContactSettings, subscribeFeedback, subscribeCheckoutQr, subscribeEnquiries, subscribeSavedAddresses, subscribeOrders, subscribeProducts, submitCloudOrderForDispatch, submitCloudCourierPayment, submitEnquiry, submitFeedback, updateOrderDelivery, updateProduct, uploadCheckoutQr, uploadProductMedia, verifyCloudPayment } from './domain/firestoreStore';
 import { INITIAL_CATALOG, LOGO_URL, DEFAULT_CATEGORIES, NEW_CATEGORY_VALUE, unitPrice, effectiveStatus, isPurchasable, maxOrderable, linkButtonStyle, STATUS_LABELS, STATUS_COLORS, mediaButtonStyle, whatsAppLink, type HostOrderTab, type HostTab, type SortKey, type CartLine } from './app/shared';
 import { WhatsAppIcon, GoogleSignInButton } from './components/common/icons';
@@ -23,6 +29,9 @@ import { withTimeout, getOrderStatus, getOrderStatusStyle, newestFirst } from '.
 import { validateRefundDetails } from './domain/refund';
 import UpiPayBox from './components/checkout/UpiPayBox';
 import ConfirmDialog, { type DialogResult, type DialogReason } from './components/host/ConfirmDialog';
+import { deleteKuchu, publishKuchu, refreshKuchuFresh, rejectCloudOrderItem, subscribeKuchu, updateKuchu } from './domain/firestoreStore';
+import KuchuManager from './components/host/KuchuManager';
+import { FINAL_SALE_DETAIL, FINAL_SALE_HEADLINE, compatibleKuchu, itemCodeWithKuchu, lineKey, lineUnitPrice, lineRegularPrice } from './domain/kuchu';
 import { deleteHostRecord, deleteOrderForever, getMyHostRecord, logAudit, restoreOrder, saveHostRecord, setHostActive, softDeleteOrder, subscribeAuditLog, subscribeHostRecords, validateHostRecord } from './domain/adminStore';
 import { useOrderUpdates } from './app/orderUpdates';
 import ReportPaymentIssue from './components/checkout/ReportPaymentIssue';
@@ -89,7 +98,18 @@ export default function App() {
   const [upiDraft, setUpiDraft] = useState('');
   const [payeeDraft, setPayeeDraft] = useState('');
   const [aiWeights, setAiWeights] = useState<Record<string, number>>({});
-  const [newProduct, setNewProduct] = useState({ name: '', category: 'Sarees', price: '', offerPrice: '', quantity: '1', description: '', image: '' });
+  const [contactEmail, setContactEmail] = useState('');
+  const [consentEmail, setConsentEmail] = useState(false);
+  const [consentWhatsapp, setConsentWhatsapp] = useState(false);
+  const [consentPromos, setConsentPromos] = useState(false);
+  const [notifyNote, setNotifyNote] = useState('');
+  const [kuchuList, setKuchuList] = useState<KuchuDesign[]>([]);
+  const [kuchuChoice, setKuchuChoice] = useState<Record<string, string>>({});
+  const [threadChoice, setThreadChoice] = useState<Record<string, string>>({});
+  const [finalSaleAccepted, setFinalSaleAccepted] = useState(false);
+  const [colorSuggestions, setColorSuggestions] = useState<PaletteColor[]>([]);
+  const [lastPublished, setLastPublished] = useState<Product | null>(null);
+  const [newProduct, setNewProduct] = useState({ name: '', category: 'Sarees', price: '', offerPrice: '', quantity: '1', description: '', image: '', categoryCode: '', patternCode: '', color: '', size: '', kuchuCode: '', itemCode: '', compatibleKuchuIds: [] as string[], threadColors: [] as string[] });
   const [productMediaFiles, setProductMediaFiles] = useState<File[]>([]);
   const [paymentQrUrl, setPaymentQrUrl] = useState('');
   const [paymentQrFile, setPaymentQrFile] = useState<File | null>(null);
@@ -118,8 +138,8 @@ export default function App() {
   const [enquiryError, setEnquiryError] = useState('');
   const [lastEnquiryAt, setLastEnquiryAt] = useState(0);
   // Always price the cart from the live catalog so host price changes apply immediately.
-  const cart: CartLine[] = cartLines.map(line => ({ ...line, product: products.find(product => product.id === line.product.id) || line.product }));
-  const unavailableLines = cart.filter(line => !products.some(product => product.id === line.product.id) || !isPurchasable(line.product) || line.quantity > maxOrderable(line.product));
+  const cart: CartLine[] = cartLines.map(line => ({ ...line, product: products.find(product => product.id === line.product.id) || line.product, ...(line.kuchu ? { kuchu: kuchuList.find(item => item.id === line.kuchu?.id) || line.kuchu } : {}) }));
+  const unavailableLines = cart.filter(line => !products.some(product => product.id === line.product.id) || !isPurchasable(line.product) || line.quantity > maxOrderable(line.product) || (line.kuchu ? !compatibleKuchu(line.product, kuchuList).some(item => item.id === line.kuchu?.id) : false));
   const [checkoutStep, setCheckoutStep] = useState<1 | 2 | 3>(1);
   const [courierPolicyAccepted, setCourierPolicyAccepted] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
@@ -326,6 +346,12 @@ export default function App() {
     }, error => setSyncError(error.message), { live: isStaff });
   }, [isStaff]);
 
+  // Kuchu designs: customers read them (cached); staff see changes live.
+  useEffect(() => {
+    if (!firebaseConfigured) return;
+    return subscribeKuchu(setKuchuList, () => undefined, { live: isStaff });
+  }, [isStaff]);
+
   // Courier charge rules: customers read them (cached); staff see changes live.
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -334,6 +360,25 @@ export default function App() {
       setPrefixDraft(config.bangalorePrefixes.join(', '));
     }, () => undefined, { live: isStaff });
   }, [isStaff]);
+
+  // Pre-fill the contact email from the Google sign-in, and fade the host's "customer notified" note.
+  useEffect(() => {
+    if (firebaseUser?.email) setContactEmail(current => current || firebaseUser.email || '');
+  }, [firebaseUser]);
+  useEffect(() => {
+    if (!notifyNote) return;
+    const timer = window.setTimeout(() => setNotifyNote(''), 7000);
+    return () => window.clearTimeout(timer);
+  }, [notifyNote]);
+
+  // Suggest colours from the first uploaded photo of a new catalog item.
+  useEffect(() => {
+    const firstImage = productMediaFiles.find(file => file.type.startsWith('image/'));
+    if (!firstImage) { setColorSuggestions([]); return; }
+    let cancelled = false;
+    colorsFromPhoto(firstImage).then(colors => { if (!cancelled) setColorSuggestions(colors); });
+    return () => { cancelled = true; };
+  }, [productMediaFiles]);
 
   // Tells the customer which of their orders changed since they last looked (status, host message, hold, cancellation).
   const { changed: changedOrders, markSeen: markOrderSeen } = useOrderUpdates(activeOrders, firebaseUser?.uid || userEmail || 'guest');
@@ -457,6 +502,15 @@ export default function App() {
   const closeAcceptDialog = (result: DialogResult | null) => {
     acceptDialog?.resolve(result);
     setAcceptDialog(null);
+  };
+
+  // Tells the customer about an order event (email / WhatsApp), only where they agreed and the shop has switched it on.
+  const notifyCustomer = (orderId: string, event: NotifyEvent) => {
+    if (!firebaseConfigured) return;
+    void notifyOrder(orderId, event).then(outcome => {
+      const note = describeNotify(outcome);
+      if (note) setNotifyNote(note);
+    });
   };
 
   // Who is acting: shown beside every action in the audit trail.
@@ -627,7 +681,16 @@ export default function App() {
       alert('The offer price must be lower than the regular price. Leave it blank for no offer.');
       return;
     }
-    if (!confirmHostAction(`Publish "${newProduct.name}" to the catalog?`)) return;
+    const itemCode = (newProduct.itemCode.trim() || buildItemCode({ category: newProduct.categoryCode, pattern: newProduct.patternCode, color: colorCodeFor(newProduct.color), kuchu: newProduct.kuchuCode, size: newProduct.size })).toUpperCase();
+    if (!isValidItemCode(itemCode)) {
+      alert('Fill the Item ID parts (category code, pattern code, colour and size) so the ID looks like SILK-ZRI-MAR-63M.');
+      return;
+    }
+    if (itemCodeTaken(itemCode, products)) {
+      alert(`Item ID ${itemCode} is already used by another product. Change the colour, size or pattern code.`);
+      return;
+    }
+    if (!confirmHostAction(`Publish "${newProduct.name}" (${itemCode}) to the catalog?`)) return;
     setIsUploadingProduct(true);
     try {
       const productId = `p-${Date.now()}`;
@@ -650,6 +713,15 @@ export default function App() {
         description: newProduct.description || 'Exclusive boutique craftsmanship.',
         image: coverImage,
         media,
+        itemCode,
+        ...(newProduct.categoryCode.trim() ? { categoryCode: newProduct.categoryCode.trim().toUpperCase() } : {}),
+        ...(newProduct.patternCode.trim() ? { patternCode: newProduct.patternCode.trim().toUpperCase() } : {}),
+        ...(newProduct.color.trim() ? { color: newProduct.color.trim(), colorCode: colorCodeFor(newProduct.color) } : {}),
+        ...(newProduct.size.trim() ? { size: newProduct.size.trim() } : {}),
+        ...(newProduct.kuchuCode.trim() ? { kuchuCode: newProduct.kuchuCode.trim().toUpperCase() } : {}),
+        ...(designKeyFor(newProduct.categoryCode, newProduct.patternCode) ? { designKey: designKeyFor(newProduct.categoryCode, newProduct.patternCode) } : {}),
+        ...(newProduct.compatibleKuchuIds.length > 0 ? { compatibleKuchuIds: newProduct.compatibleKuchuIds } : {}),
+        ...(newProduct.threadColors.length > 0 ? { threadColors: newProduct.threadColors } : {}),
       };
       if (firebaseConfigured) {
         await withTimeout(publishProduct(addedProduct), 60000, 'Saving the item is taking too long. Check your connection; if it does not appear in the catalog, try again.');
@@ -657,8 +729,10 @@ export default function App() {
       } else {
         setProducts([addedProduct, ...products]);
       }
-      setNewProduct({ name: '', category: 'Sarees', price: '', offerPrice: '', quantity: '1', description: '', image: '' });
+      setNewProduct({ name: '', category: 'Sarees', price: '', offerPrice: '', quantity: '1', description: '', image: '', categoryCode: '', patternCode: '', color: '', size: '', kuchuCode: '', itemCode: '', compatibleKuchuIds: [] as string[], threadColors: [] as string[] });
       setProductMediaFiles([]);
+      setColorSuggestions([]);
+      setLastPublished(addedProduct);
       alert(firebaseConfigured ? 'Item published to the live catalog.' : 'Item added to the local demo catalog.');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not publish product.');
@@ -706,14 +780,14 @@ export default function App() {
   // Host Action: Edit or remove a published product
   const handleUpdateProduct = async (
     productId: string,
-    changes: { name: string; category: string; price: number; offerPrice?: number; quantity: number; status: ProductStatus },
+    changes: { name: string; category: string; price: number; offerPrice?: number; quantity: number; status: ProductStatus; itemCode?: string; color?: string; colorCode?: string; size?: string; categoryCode?: string; patternCode?: string; compatibleKuchuIds?: string[]; threadColors?: string[] },
   ) => {
     try {
       if (firebaseConfigured) {
         await withTimeout(updateProduct(productId, changes), 30000, 'Saving the changes is taking too long. Check your internet connection and try again.');
         audit('PRODUCT_UPDATED', 'product', productId, `Edited: ${Object.keys(changes).join(', ')}`);
       } else {
-        setProducts(current => current.map(product => product.id === productId ? { ...product, ...changes } : product));
+        setProducts(current => current.map(product => product.id === productId ? { ...product, ...changes, ...(changes.categoryCode !== undefined || changes.patternCode !== undefined ? { designKey: designKeyFor(changes.categoryCode || '', changes.patternCode || '') || undefined } : {}) } : product));
       }
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not update the product.');
@@ -936,6 +1010,7 @@ export default function App() {
         setActiveOrders([...globalOrderBook.getAllOrders()].map(order => order.orderId === orderId ? { ...order, rejectionReason: reason, rejectionNote: note } : order));
       }
       audit('ORDER_REJECTED', 'order', orderId, `Rejected: ${reason}`);
+      notifyCustomer(orderId, 'CANCELLED');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not reject the order.');
       throw error;
@@ -982,6 +1057,44 @@ export default function App() {
       alert(body.ok ? (body.message || 'Done.') : `Not done: ${body.error || 'unknown error'}`);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Could not reach the server.');
+    }
+  };
+
+  const handlePublishKuchu = async (kuchu: Omit<KuchuDesign, 'photos' | 'createdAt'>, files: File[]) => {
+    if (!(await askAccept(`Publish Kuchu ${kuchu.id}?`, `${kuchu.name} · ₹${kuchu.price} · ${files.length} photo(s). It becomes available to tag on sarees.`, 'Publish Kuchu'))) return;
+    const photos = firebaseConfigured
+      ? await withTimeout(uploadProductMedia(files), 120000, 'Uploading the photos is taking too long. Check your internet connection and try again.')
+      : files.map(file => ({ url: URL.createObjectURL(file), type: 'image' as const, name: file.name }));
+    const full: KuchuDesign = { ...kuchu, photos, createdAt: new Date().toISOString() };
+    if (firebaseConfigured) {
+      await withTimeout(publishKuchu(full), 60000, 'Saving is taking too long. Check your internet connection and try again.');
+      audit('KUCHU_PUBLISHED', 'kuchu', full.id, `Published Kuchu ${full.name} (₹${full.price})`);
+    } else {
+      setKuchuList(current => [...current, full].sort((left, right) => left.id.localeCompare(right.id)));
+    }
+  };
+
+  const handleUpdateKuchu = async (id: string, changes: { name: string; price: number; active: boolean }) => {
+    if (firebaseConfigured) {
+      await withTimeout(updateKuchu(id, changes), 30000, 'Saving is taking too long. Check your internet connection and try again.');
+      audit('KUCHU_UPDATED', 'kuchu', id, `Kuchu ${changes.name}: ₹${changes.price}, ${changes.active ? 'visible' : 'hidden'}`);
+    } else {
+      setKuchuList(current => current.map(item => item.id === id ? { ...item, ...changes } : item));
+    }
+  };
+
+  const handleDeleteKuchu = async (kuchu: KuchuDesign) => {
+    const used = products.filter(product => (product.compatibleKuchuIds || []).includes(kuchu.id)).length;
+    if (!(await askDialog({ title: `Delete Kuchu ${kuchu.id}?`, details: `${kuchu.name}${used ? ` is tagged on ${used} saree(s); it will no longer be offered on them.` : '.'} Past orders keep their details.`, confirmLabel: 'Delete Kuchu', tone: 'danger' }))) return;
+    try {
+      if (firebaseConfigured) {
+        await withTimeout(deleteKuchu(kuchu.id), 30000, 'Deleting is taking too long. Check your internet connection and try again.');
+        audit('KUCHU_DELETED', 'kuchu', kuchu.id, `Deleted Kuchu ${kuchu.name}`);
+      } else {
+        setKuchuList(current => current.filter(item => item.id !== kuchu.id));
+      }
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not delete the Kuchu.');
     }
   };
 
@@ -1032,6 +1145,37 @@ export default function App() {
       issueType,
       productName: `Order ${order.orderId}`,
     }), 30000, 'Sending is taking too long. Check your internet connection and try again.');
+  };
+
+  // Reject one item of an order (for example a damaged piece) without cancelling the rest.
+  const REJECT_ITEM_REASONS: DialogReason[] = [
+    { label: 'Item is damaged or defective', note: 'This piece did not pass our quality check. We are sorry. The rest of your order continues, and we will refund this item.' },
+    { label: 'Item is out of stock', note: 'This piece is no longer available. The rest of your order continues, and we will refund this item.' },
+    { label: 'Colour or design does not match the photo', note: 'This piece does not match what you chose. The rest of your order continues, and we will refund this item.' },
+    { label: 'Other', note: '' },
+  ];
+  const handleRejectItem = async (order: Order, index: number) => {
+    const line = order.items[index];
+    if (!line) return;
+    const result = await askDialog({
+      title: `Reject "${line.name}"${line.color ? ` (${line.color})` : ''}?`,
+      details: `Order ${order.orderId} · ₹${line.price * line.quantity} for this item. Its stock is put back, the customer is asked for refund details, and the rest of the order continues. To cancel everything, use Reject order instead.`,
+      confirmLabel: 'Reject this item',
+      tone: 'danger',
+      reasons: REJECT_ITEM_REASONS,
+    });
+    if (!result) return;
+    try {
+      if (firebaseConfigured) {
+        await withTimeout(rejectCloudOrderItem(order.orderId, index, actor().nickname, result.reason, result.note), 30000, 'Rejecting the item is taking too long. Check your internet connection and try again.');
+        audit('ORDER_ITEM_REJECTED', 'order', order.orderId, `Rejected ${line.itemCode || line.name}: ${result.reason}`);
+        notifyCustomer(order.orderId, 'ITEM_REJECTED');
+      } else {
+        setSyncError('Rejecting single items needs the live database.');
+      }
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not reject the item.');
+    }
   };
 
   const handleSubmitRefund = async (orderId: string, method: 'UPI_ID' | 'UPI_PHONE', value: string) => {
@@ -1150,28 +1294,44 @@ export default function App() {
   };
 
   // Cart Management
-  const addToCart = (product: Product) => isPurchasable(product) && setCart(current => (
-    current.some(line => line.product.id === product.id)
-      ? current.map(line => line.product.id === product.id
-        ? { ...line, quantity: Math.min(line.quantity + 1, maxOrderable(products.find(item => item.id === product.id) || product)) }
-        : line)
-      : [...current, { product, quantity: 1 }]
-  ));
-  const changeQuantity = (productId: string, delta: number) => setCart(current => current.flatMap(line => {
-    if (line.product.id !== productId) return [line];
-    const nextQuantity = Math.min(line.quantity + delta, maxOrderable(products.find(item => item.id === productId) || line.product));
+  type KuchuSelection = { kuchu?: KuchuDesign; threadColor?: string };
+  const addToCart = (product: Product, selection?: KuchuSelection) => isPurchasable(product) && setCart(current => {
+    const candidate: CartLine = { product, quantity: 1, ...(selection?.kuchu ? { kuchu: selection.kuchu, ...(selection.threadColor ? { threadColor: selection.threadColor } : {}) } : {}) };
+    const key = lineKey(candidate);
+    const limit = maxOrderable(products.find(item => item.id === product.id) || product);
+    const sameProduct = current.filter(line => line.product.id === product.id).reduce((sum, line) => sum + line.quantity, 0);
+    if (sameProduct >= limit) return current;
+    return current.some(line => lineKey(line) === key)
+      ? current.map(line => lineKey(line) === key ? { ...line, quantity: line.quantity + 1 } : line)
+      : [...current, candidate];
+  });
+  const changeQuantity = (key: string, delta: number) => setCart(current => current.flatMap(line => {
+    if (lineKey(line) !== key) return [line];
+    const limit = maxOrderable(products.find(item => item.id === line.product.id) || line.product);
+    const others = current.filter(other => other.product.id === line.product.id && lineKey(other) !== key).reduce((sum, other) => sum + other.quantity, 0);
+    const nextQuantity = Math.min(line.quantity + delta, limit - others);
     return nextQuantity <= 0 ? [] : [{ ...line, quantity: nextQuantity }];
   }));
-  const removeFromCart = (productId: string) => setCart(current => current.filter(line => line.product.id !== productId));
-  const buyNow = (product: Product) => {
-    addToCart(product);
+  const removeFromCart = (key: string) => setCart(current => current.filter(line => lineKey(line) !== key));
+  const buyNow = (product: Product, selection?: KuchuSelection) => {
+    addToCart(product, selection);
     setCheckoutStep(1);
     setIsCheckoutOpen(false);
     setIsCartOpen(true);
     setCustomerTab('SHOP');
   };
+  // What the customer picked on a saree card: none, or one Kuchu design with a thread colour.
+  const selectedKuchuFor = (product: Product): KuchuDesign | null => compatibleKuchu(product, kuchuList).find(item => item.id === kuchuChoice[product.id]) || null;
+  const selectionFor = (product: Product): KuchuSelection | 'MISSING_THREAD' => {
+    const kuchu = selectedKuchuFor(product);
+    if (!kuchu) return {};
+    const thread = threadChoice[product.id];
+    if ((product.threadColors || []).length > 0 && !thread) return 'MISSING_THREAD';
+    return { kuchu, ...(thread ? { threadColor: thread } : {}) };
+  };
   const cartCount = cart.reduce((count, line) => count + line.quantity, 0);
-  const cartTotal = cart.reduce((sum, line) => sum + unitPrice(line.product) * line.quantity, 0);
+  const cartTotal = cart.reduce((sum, line) => sum + lineUnitPrice(line.product, line.kuchu) * line.quantity, 0);
+  const cartHasKuchu = cart.some(line => Boolean(line.kuchu));
 
   // Customer Action: Submit Order via OrderBook Engine
   // Which courier rule applies to the order being placed (checked again by the host).
@@ -1233,6 +1393,14 @@ export default function App() {
         alert(tr(proofProblem));
         return;
       }
+      if (consentEmail && !isEmail(contactEmail)) {
+        alert(tr('Enter a valid email address to get updates by email, or untick the email box.'));
+        return;
+      }
+      if (cartHasKuchu && !finalSaleAccepted) {
+        alert(tr('Please accept the final-sale rule to order a saree with a Kuchu.'));
+        return;
+      }
       if (proofCheck?.blocking) {
         alert(proofCheck.blocking);
         return;
@@ -1253,7 +1421,7 @@ export default function App() {
       } else {
         proofUrl = URL.createObjectURL(paymentProof);
       }
-      const orderItems = cart.map(line => ({ productId: line.product.id, name: line.product.name, price: unitPrice(line.product), regularPrice: line.product.price, quantity: line.quantity }));
+      const orderItems = cart.map(line => ({ productId: line.product.id, name: line.product.name, price: lineUnitPrice(line.product, line.kuchu), regularPrice: lineRegularPrice(line.product, line.kuchu), quantity: line.quantity, ...(line.product.color ? { color: line.product.color } : {}), ...((line.kuchu ? itemCodeWithKuchu(line.product.itemCode, line.kuchu.id) : line.product.itemCode) ? { itemCode: line.kuchu ? itemCodeWithKuchu(line.product.itemCode, line.kuchu.id) : line.product.itemCode } : {}), ...(line.product.image ? { image: line.product.image } : {}), ...(line.kuchu ? { kuchuId: line.kuchu.id, kuchuName: line.kuchu.name, kuchuPrice: line.kuchu.price, ...(line.threadColor ? { threadColor: line.threadColor } : {}) } : {}) }));
       const deliveryAddress: CustomerAddress = {
         ...address,
         country: address.country?.trim() || 'India',
@@ -1272,6 +1440,8 @@ export default function App() {
           proofFingerprint,
           proofCheck ? (({ blocking: _ignored, ...storable }) => storable)(proofCheck) : undefined,
           courierDecision,
+          cartHasKuchu ? new Date().toISOString() : undefined,
+          newConsent({ email: contactEmail, whatsapp: address.phone, consentEmail, consentWhatsapp, consentPromos }, new Date().toISOString()),
         )
         : globalOrderBook.createOrder(
           userEmail,
@@ -1318,11 +1488,13 @@ export default function App() {
       setUtr('');
       setPaymentProof(null);
       setProofCheck(null);
+      setFinalSaleAccepted(false);
       setIsCheckoutOpen(false);
       setCheckoutStep(1);
       setCustomerTab('ORDERS');
       setOrderCopied(false);
       setExpandedOrders({ [order.orderId]: true });
+      notifyCustomer(order.orderId, 'ORDER_PLACED');
       setPlacedOrder({ orderId: order.orderId, total: cartTotal, phone: deliveryAddress.phone, name: deliveryAddress.fullName });
     } catch (err: any) {
       const message = err instanceof Error && err.message.includes('permission-denied')
@@ -1330,7 +1502,10 @@ export default function App() {
         : err.message;
       alert(message);
       // The most likely reason is that stock changed, so show the customer the current quantities.
-      if (firebaseConfigured && !isStaff) void refreshProductsFresh().then(setProducts).catch(() => undefined);
+      if (firebaseConfigured && !isStaff) {
+        void refreshProductsFresh().then(setProducts).catch(() => undefined);
+        void refreshKuchuFresh().then(setKuchuList).catch(() => undefined);
+      }
     }
   };
 
@@ -1370,6 +1545,7 @@ export default function App() {
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
       audit(kind === 'ITEM' ? 'ITEM_PAYMENT_ACCEPTED' : 'COURIER_PAYMENT_ACCEPTED', 'order', orderId, `Accepted ${paymentKindLabel}`);
+      notifyCustomer(orderId, 'PAYMENT_VERIFIED');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not verify payment.');
     }
@@ -1387,6 +1563,7 @@ export default function App() {
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
       audit('COURIER_BILL_ADDED', 'order', orderId, `Courier charge ₹${bill.amount} (${bill.courierName})`);
+      notifyCustomer(orderId, 'COURIER_QUOTE_ADDED');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not save courier bill.');
       throw error;
@@ -1421,6 +1598,7 @@ export default function App() {
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
       audit('ORDER_DISPATCHED', 'order', orderId, 'Marked dispatched');
+      notifyCustomer(orderId, 'DISPATCHED');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not submit order for dispatch.');
     }
@@ -1451,6 +1629,7 @@ export default function App() {
         setActiveOrders([...globalOrderBook.getAllOrders()]);
       }
       audit('ORDER_DELIVERED', 'order', orderId, 'Marked delivered');
+      notifyCustomer(orderId, 'DELIVERED');
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not mark order delivered.');
     }
@@ -1567,6 +1746,14 @@ export default function App() {
     else if (sortBy === 'in-stock') sorted.sort((left, right) => Number(isPurchasable(right)) - Number(isPurchasable(left)));
     return sorted;
   })();
+
+  // Products of the same design in different colours are shown as one listing with colour choices.
+  const [variantChoice, setVariantChoice] = useState<Record<string, string>>({});
+  const groupedProducts = groupVariants(filteredProducts).map(group => {
+    const chosen = group.variants.find(variant => variant.id === variantChoice[group.key]);
+    const shown = chosen || group.variants.find(isPurchasable) || group.variants[0];
+    return { key: group.key, variants: group.variants, product: shown };
+  });
 
   const newEnquiryCount = enquiries.filter(item => item.status === 'NEW').length;
   const newFeedbackCount = feedbackItems.filter(item => item.status === 'NEW').length;
@@ -1755,10 +1942,18 @@ export default function App() {
             </div>
 
             {hostTab === 'UPLOAD' && (<>
+              <KuchuManager list={kuchuList} onPublish={handlePublishKuchu} onUpdate={handleUpdateKuchu} onDelete={handleDeleteKuchu} />
             {/* Catalog Upload Form */}
             <div style={{ backgroundColor: '#f7ebe8', padding: '1.2rem', borderRadius: '8px', marginBottom: '2rem' }}>
               <h3 style={{ margin: '0 0 1rem' }}>Upload New Catalog Item</h3>
               {firebaseConfigured && (!CONFIG.cloudinary.cloudName || !CONFIG.cloudinary.uploadPreset) && <p role="status" style={{ color: '#8a4b08', fontSize: '0.85rem' }}>Configure VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET to upload product media. You can still use a hosted image URL.</p>}
+              {lastPublished && (
+                <div role="status" style={{ marginBottom: '0.8rem', padding: '0.6rem 0.8rem', background: '#e8f5e9', border: '1px solid #a5d6a7', borderRadius: '8px', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
+                  <span>Published <code>{lastPublished.itemCode}</code>{lastPublished.color ? ` (${lastPublished.color})` : ''}.</span>
+                  <button type="button" onClick={() => { setNewProduct({ name: lastPublished.name, category: lastPublished.category, price: String(lastPublished.price), offerPrice: lastPublished.offerPrice ? String(lastPublished.offerPrice) : '', quantity: '1', description: lastPublished.description, image: '', categoryCode: lastPublished.categoryCode || '', patternCode: lastPublished.patternCode || '', color: '', size: lastPublished.size || '', kuchuCode: lastPublished.kuchuCode || '', itemCode: '', compatibleKuchuIds: lastPublished.compatibleKuchuIds || [], threadColors: lastPublished.threadColors || [] }); setLastPublished(null); }} style={{ cursor: 'pointer', fontWeight: 'bold' }}>Add another colour of this design</button>
+                  <button type="button" onClick={() => setLastPublished(null)} style={{ cursor: 'pointer' }}>Dismiss</button>
+                </div>
+              )}
               <form onSubmit={handlePublishProduct} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.8rem' }}>
                 <input type="text" placeholder="Product Name *" value={newProduct.name} onChange={e => setNewProduct({ ...newProduct, name: e.target.value })} required style={{ padding: '0.6rem' }} />
                 <div style={{ display: 'grid', gap: '0.4rem' }}>
@@ -1788,6 +1983,62 @@ export default function App() {
                 <input type="number" placeholder="Regular Price (₹) *" value={newProduct.price} onChange={e => setNewProduct({ ...newProduct, price: e.target.value })} required style={{ padding: '0.6rem' }} />
                 <input type="number" min="1" step="0.01" aria-label="Offer price (leave blank for no offer)" placeholder="Offer Price (₹) - blank = no offer" value={newProduct.offerPrice} onChange={e => setNewProduct({ ...newProduct, offerPrice: e.target.value })} style={{ padding: '0.6rem' }} />
                 <input type="number" min="0" step="1" aria-label="Quantity in stock" placeholder="Quantity in stock *" value={newProduct.quantity} onChange={e => setNewProduct({ ...newProduct, quantity: e.target.value })} required style={{ padding: '0.6rem' }} />
+                <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.6rem', padding: '0.8rem', background: '#faf6f8', border: '1px solid #eee', borderRadius: '8px' }}>
+                  <strong>Item ID and colour</strong>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.5rem' }}>
+                    <input aria-label="Category code" list="mr-category-codes" placeholder={`Category code (${categoryCodeFor(newProduct.category) || 'SILK'})`} value={newProduct.categoryCode} onChange={e => setNewProduct({ ...newProduct, categoryCode: e.target.value.toUpperCase(), itemCode: '' })} maxLength={6} style={{ padding: '0.55rem' }} />
+                    <datalist id="mr-category-codes">{['SILK', 'COTN', 'GEOR', 'CHIF', 'LINN', 'TUSS'].map(code => <option key={code} value={code} />)}</datalist>
+                    <input aria-label="Pattern code" placeholder="Pattern code (e.g. ZRI)" value={newProduct.patternCode} onChange={e => setNewProduct({ ...newProduct, patternCode: e.target.value.toUpperCase(), itemCode: '' })} maxLength={6} style={{ padding: '0.55rem' }} />
+                    <input aria-label="Colour" list="mr-color-names-upload" placeholder="Colour (e.g. Maroon)" value={newProduct.color} onChange={e => setNewProduct({ ...newProduct, color: e.target.value, itemCode: '' })} maxLength={30} style={{ padding: '0.55rem' }} />
+                    <datalist id="mr-color-names-upload">{PALETTE.map(option => <option key={option.code} value={option.name} />)}</datalist>
+                    <input aria-label="Size" placeholder="Size (e.g. 6.3m)" value={newProduct.size} onChange={e => setNewProduct({ ...newProduct, size: e.target.value, itemCode: '' })} maxLength={12} style={{ padding: '0.55rem' }} />
+                    <input aria-label="Kuchu code (optional)" placeholder="Kuchu code (optional)" value={newProduct.kuchuCode} onChange={e => setNewProduct({ ...newProduct, kuchuCode: e.target.value.toUpperCase(), itemCode: '' })} maxLength={8} style={{ padding: '0.55rem' }} />
+                  </div>
+                  {colorSuggestions.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', fontSize: '0.85rem' }}>
+                      <span>Colours seen in your photo:</span>
+                      {colorSuggestions.map(option => (
+                        <button key={option.code} type="button" onClick={() => setNewProduct({ ...newProduct, color: option.name, itemCode: '' })} style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center', padding: '0.25rem 0.6rem', borderRadius: '999px', border: '1px solid #ccc', background: newProduct.color === option.name ? '#f3e9ef' : '#fff', cursor: 'pointer' }}>
+                          <span aria-hidden="true" style={{ width: '14px', height: '14px', borderRadius: '50%', background: option.hex, border: '1px solid #999' }} />{option.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <label style={{ display: 'grid', gap: '0.25rem', fontSize: '0.85rem' }}>
+                    Item ID (made from the parts above; you can change it)
+                    <input aria-label="Item ID" value={newProduct.itemCode} onChange={e => setNewProduct({ ...newProduct, itemCode: e.target.value.toUpperCase() })} placeholder={buildItemCode({ category: newProduct.categoryCode, pattern: newProduct.patternCode, color: colorCodeFor(newProduct.color), kuchu: newProduct.kuchuCode, size: newProduct.size }) || 'SILK-ZRI-MAR-63M'} maxLength={48} style={{ padding: '0.55rem', fontFamily: 'monospace' }} />
+                  </label>
+                  <small style={{ color: '#666' }}>Items with the same category code and pattern code are shown together as colours of one design.</small>
+                </div>
+                <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.6rem', padding: '0.8rem', background: '#faf6f8', border: '1px solid #eee', borderRadius: '8px' }}>
+                  <strong>Kuchu and thread colours (optional)</strong>
+                  {kuchuList.length === 0
+                    ? <small style={{ color: '#666' }}>Add Kuchu designs in the Upload Kuchu Section above to tag them on this saree.</small>
+                    : (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        {kuchuList.filter(kuchu => kuchu.active).map(kuchu => (
+                          <label key={kuchu.id} style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center', padding: '0.3rem 0.6rem', border: '1px solid #ddd', borderRadius: '8px', background: '#fff', cursor: 'pointer', fontSize: '0.85rem' }}>
+                            <input type="checkbox" checked={newProduct.compatibleKuchuIds.includes(kuchu.id)} onChange={event => setNewProduct({ ...newProduct, compatibleKuchuIds: event.target.checked ? [...newProduct.compatibleKuchuIds, kuchu.id] : newProduct.compatibleKuchuIds.filter(id => id !== kuchu.id) })} />
+                            {kuchu.photos[0] && <img src={kuchu.photos[0].url} alt="" style={{ width: '30px', height: '30px', objectFit: 'cover', borderRadius: '4px' }} />}
+                            {kuchu.name} <code>{kuchu.id}</code> +₹{kuchu.price}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  <div style={{ fontSize: '0.85rem' }}>Thread colours customers can choose (from this saree's colour combination):</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    {PALETTE.map(option => {
+                      const picked = newProduct.threadColors.includes(option.name);
+                      const suggested = colorSuggestions.some(item => item.code === option.code) || option.name === newProduct.color;
+                      return (
+                        <button key={option.code} type="button" aria-pressed={picked} onClick={() => setNewProduct({ ...newProduct, threadColors: picked ? newProduct.threadColors.filter(name => name !== option.name) : [...newProduct.threadColors, option.name] })} style={{ display: 'inline-flex', gap: '0.3rem', alignItems: 'center', padding: '0.2rem 0.55rem', borderRadius: '999px', border: picked ? '2px solid #6e1a3a' : suggested ? '1px dashed #6e1a3a' : '1px solid #ccc', background: picked ? '#f3e9ef' : '#fff', cursor: 'pointer', fontSize: '0.78rem' }}>
+                          <span aria-hidden="true" style={{ width: '12px', height: '12px', borderRadius: '50%', background: option.hex, border: '1px solid #999' }} />{option.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <small style={{ color: '#666' }}>Dashed colours were seen in your photo or are the saree colour. Tap the ones that go with this saree.</small>
+                </div>
                 <div style={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
                   <label style={mediaButtonStyle}>
                     📷 Take photo
@@ -1943,6 +2194,8 @@ export default function App() {
                       key={`${product.id}-${product.name}-${product.price}-${product.offerPrice ?? ''}-${product.status ?? ''}`}
                       product={product}
                       categories={categoryOptions}
+                      allProducts={products}
+                      kuchuList={kuchuList}
                       onSave={handleUpdateProduct}
                       onDelete={handleDeleteProduct}
                     />
@@ -1978,7 +2231,7 @@ export default function App() {
                 <article key={ord.orderId} className={`mr-order-row${open ? ' is-open' : ''}`} style={{ border: '1px solid #ddd', padding: '0.8rem 1rem', borderRadius: '8px', marginBottom: '0.7rem', background: '#fff' }}>
                   <div className="mr-quick" role="tooltip">
                     <strong>{ord.address.fullName}</strong> · {ord.address.phone}<br />
-                    {ord.items.map(item => `${item.name} × ${item.quantity}`).join(', ')}<br />
+                    {ord.items.filter(item => !isLineRejected(item)).map(item => `${item.name}${item.color ? ` (${item.color})` : ''} × ${item.quantity}`).join(', ')}<br />
                     {getOrderStatus(ord)}{ord.itemPayment?.utr ? ` · UTR ${ord.itemPayment.utr}` : ''}<br />
                     {[ord.address.city, ord.address.district, ord.address.state, ord.address.pincode, ord.address.country].filter(Boolean).join(', ')}
                   </div>
@@ -2023,10 +2276,11 @@ export default function App() {
                       </button>
                     )}
                   </div>
-                  <ul style={{ margin: '0.5rem 0', paddingLeft: '1.2rem' }}>
-                    {ord.items.map((item, index) => <li key={`${item.productId}-${index}`}>{item.name} × {item.quantity} · ₹{item.price * item.quantity}</li>)}
-                  </ul>
-                  <p style={{ margin: '0.4rem 0', fontWeight: 'bold' }}>Items total: ₹{ord.itemTotal}</p>
+                  <OrderLines items={ord.items} onRejectItem={hostOrderTab === 'ACTIVE' && activeLines(ord).length > 1 ? index => void handleRejectItem(ord, index) : undefined} />
+                  <p style={{ margin: '0.4rem 0', fontWeight: 'bold' }}>
+                    Items total: ₹{acceptedTotal(ord)}
+                    {(ord.rejectedTotal || 0) > 0 && <span style={{ color: '#8b1e2d', fontWeight: 'normal' }}> (₹{ord.rejectedTotal} rejected; originally ₹{ord.itemTotal}{ord.refundDue ? `, refund ₹${ord.refundDue}${ord.refundDetails ? ` to ${describeRefund(ord)}` : ' - waiting for the customer to send refund details'}` : ''})</span>}
+                  </p>
                   <Suspense fallback={<LazyFallback />}><ParcelSheet key={`${ord.orderId}-${ord.parcelDetails?.savedAt || 'new'}`} order={ord} onSave={handleSaveParcel} /></Suspense>
                   {ord.itemPayment && (
                     <div style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
@@ -2241,14 +2495,67 @@ export default function App() {
 
             {/* Catalog Grid */}
             <div id="mr-catalog" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.8rem', scrollMarginTop: '100px' }}>
-              {filteredProducts.map(product => (
-                <div key={product.id} id={`product-${product.id}`} style={{ backgroundColor: '#fff', borderRadius: '10px', overflow: 'hidden', boxShadow: highlightedProductId === product.id ? '0 0 0 3px #d9a441, 0 12px 30px rgba(110,26,58,0.35)' : '0 4px 12px rgba(0,0,0,0.08)', transition: 'box-shadow 0.4s ease', display: 'flex', flexDirection: 'column' }}>
-                  <ProductGallery product={product} badges={cardBadges(product)} onView={() => trackProductView(product.id, product.category)} />
+              {groupedProducts.map(({ key: groupKey, variants, product }) => (
+                <div key={groupKey} id={`product-${product.id}`} style={{ backgroundColor: '#fff', borderRadius: '10px', overflow: 'hidden', boxShadow: highlightedProductId === product.id ? '0 0 0 3px #d9a441, 0 12px 30px rgba(110,26,58,0.35)' : '0 4px 12px rgba(0,0,0,0.08)', transition: 'box-shadow 0.4s ease', display: 'flex', flexDirection: 'column' }}>
+                  <ProductGallery key={product.id} product={product} badges={cardBadges(product)} onView={() => trackProductView(product.id, product.category)} />
                   <div style={{ padding: '1rem', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                     <div>
                       <span style={{ fontSize: '0.75rem', color: '#6e1a3a', fontWeight: 'bold', textTransform: 'uppercase' }}>{tr(product.category)}</span>
                       <h3 style={{ margin: '0.3rem 0', fontSize: '1.1rem' }}>{product.name}</h3>
+                      {variants.length > 1 && (
+                        <div role="group" aria-label={tr('Colours')} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', margin: '0.3rem 0' }}>
+                          {variants.map(variant => {
+                            const swatch = PALETTE.find(option => option.code === variant.colorCode || option.name === variant.color);
+                            const selected = variant.id === product.id;
+                            return (
+                              <button key={variant.id} type="button" aria-pressed={selected} title={`${variant.color || variant.name}${isPurchasable(variant) ? '' : ' (not available)'}`} onClick={() => setVariantChoice(current => ({ ...current, [groupKey]: variant.id }))} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.2rem 0.55rem', borderRadius: '999px', border: selected ? '2px solid #6e1a3a' : '1px solid #ccc', background: '#fff', cursor: 'pointer', fontSize: '0.78rem', opacity: isPurchasable(variant) ? 1 : 0.55 }}>
+                                <span aria-hidden="true" style={{ width: '14px', height: '14px', borderRadius: '50%', background: swatch?.hex || '#ddd', border: '1px solid #999' }} />{variant.color || variant.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {(product.color || product.itemCode) && variants.length === 1 && (
+                        <p style={{ margin: '0 0 0.2rem', fontSize: '0.78rem', color: '#6e1a3a' }}>{product.color ? `${tr('Colour')}: ${product.color}` : ''}{product.size ? ` · ${product.size}` : ''}</p>
+                      )}
                       <p style={{ fontSize: '0.85rem', color: '#666', lineHeight: '1.3' }}>{product.description}</p>
+                      {compatibleKuchu(product, kuchuList).length > 0 && (
+                        <fieldset style={{ margin: '0.5rem 0', padding: '0.5rem 0.6rem', border: '1px solid #e5d3dc', borderRadius: '8px', display: 'grid', gap: '0.35rem' }}>
+                          <legend style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#6e1a3a', padding: '0 0.3rem' }}>{tr('Add a Kuchu (choose one)')}</legend>
+                          <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem', cursor: 'pointer' }}>
+                            <input type="radio" name={`kuchu-${product.id}`} checked={!selectedKuchuFor(product)} onChange={() => setKuchuChoice(current => ({ ...current, [product.id]: '' }))} />
+                            {tr('No Kuchu')}
+                          </label>
+                          {compatibleKuchu(product, kuchuList).map(kuchu => (
+                            <label key={kuchu.id} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem', cursor: 'pointer', flexWrap: 'wrap' }}>
+                              <input type="radio" name={`kuchu-${product.id}`} checked={kuchuChoice[product.id] === kuchu.id} onChange={() => setKuchuChoice(current => ({ ...current, [product.id]: kuchu.id }))} />
+                              <span>{kuchu.name} <strong style={{ color: '#6e1a3a' }}>+₹{kuchu.price}</strong></span>
+                              <span style={{ display: 'inline-flex', gap: '0.25rem' }}>
+                                {kuchu.photos.slice(0, 4).map(photo => (
+                                  <a key={photo.url} href={photo.url} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}><img src={photo.url} alt={`${kuchu.name} preview`} loading="lazy" style={{ width: '34px', height: '34px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #ddd' }} /></a>
+                                ))}
+                              </span>
+                            </label>
+                          ))}
+                          {selectedKuchuFor(product) && (product.threadColors || []).length > 0 && (
+                            <div role="radiogroup" aria-label={tr('Thread colour')} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center', fontSize: '0.8rem' }}>
+                              <span>{tr('Thread colour (matches the saree):')}</span>
+                              {(product.threadColors || []).map(colorName => {
+                                const swatch = PALETTE.find(option => option.name === colorName);
+                                const picked = threadChoice[product.id] === colorName;
+                                return (
+                                  <button key={colorName} type="button" role="radio" aria-checked={picked} onClick={() => setThreadChoice(current => ({ ...current, [product.id]: colorName }))} style={{ display: 'inline-flex', gap: '0.25rem', alignItems: 'center', padding: '0.15rem 0.5rem', borderRadius: '999px', border: picked ? '2px solid #6e1a3a' : '1px solid #ccc', background: '#fff', cursor: 'pointer' }}>
+                                    <span aria-hidden="true" style={{ width: '12px', height: '12px', borderRadius: '50%', background: swatch?.hex || '#ddd', border: '1px solid #999' }} />{colorName}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <div role="note" style={{ marginTop: '0.2rem', padding: '0.4rem 0.5rem', background: '#fdecea', border: '1px solid #f5b5bd', borderRadius: '6px', fontSize: '0.78rem', color: '#8b1e2d' }}>
+                            <strong>{tr(FINAL_SALE_HEADLINE)}</strong>
+                          </div>
+                        </fieldset>
+                      )}
                       {typeof product.quantity === 'number' && product.quantity > 0 && product.quantity <= 3 && effectiveStatus(product) === 'AVAILABLE' && (
                         <p style={{ margin: '0.2rem 0', color: '#b45309', fontSize: '0.8rem', fontWeight: 'bold' }}>{tr('Only {count} left', { count: product.quantity })}</p>
                       )}
@@ -2261,23 +2568,23 @@ export default function App() {
                       <div>
                         {product.offerPrice ? (
                           <>
-                            <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#6e1a3a' }}>₹{product.offerPrice}</span>
-                            <span style={{ fontSize: '0.85rem', color: '#999', textDecoration: 'line-through', marginLeft: '0.4rem' }}>₹{product.price}</span>
+                            <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#6e1a3a' }}>₹{lineUnitPrice(product, selectedKuchuFor(product))}</span>
+                            <span style={{ fontSize: '0.85rem', color: '#999', textDecoration: 'line-through', marginLeft: '0.4rem' }}>₹{lineRegularPrice(product, selectedKuchuFor(product))}</span>
                           </>
                         ) : (
-                          <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#6e1a3a' }}>₹{product.price}</span>
+                          <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#6e1a3a' }}>₹{lineUnitPrice(product, selectedKuchuFor(product))}</span>
                         )}
                       </div>
                       {isPurchasable(product) ? (
                         <div style={{ display: 'flex', gap: '0.4rem' }}>
                           <button
-                            onClick={() => { addToCart(product); trackAddToCart(product.id, product.category); }}
+                            onClick={() => { const selection = selectionFor(product); if (selection === 'MISSING_THREAD') { alert(tr('Please choose a thread colour for your Kuchu.')); return; } addToCart(product, selection); trackAddToCart(product.id, product.category); }}
                             style={{ backgroundColor: '#fff', color: '#6e1a3a', border: '1px solid #6e1a3a', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                           >
                             {tr('+ Add')}
                           </button>
                           <button
-                            onClick={() => buyNow(product)}
+                            onClick={() => { const selection = selectionFor(product); if (selection === 'MISSING_THREAD') { alert(tr('Please choose a thread colour for your Kuchu.')); return; } buyNow(product, selection); }}
                             style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                           >
                             {tr('Buy now')}
@@ -2312,19 +2619,19 @@ export default function App() {
                     <>
                       <div style={{ display: 'grid', gap: '0.9rem' }}>
                         {cart.map(line => (
-                          <div key={line.product.id} style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', borderBottom: '1px solid #eee', paddingBottom: '0.9rem' }}>
+                          <div key={lineKey(line)} style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', borderBottom: '1px solid #eee', paddingBottom: '0.9rem' }}>
                             <img src={line.product.image} alt="" style={{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: '6px', flex: '0 0 64px' }} />
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <strong>{line.product.name}</strong>
-                              <div style={{ fontSize: '0.85rem', color: '#666' }}>{tr('₹{price} each', { price: unitPrice(line.product) })}{typeof line.product.quantity === 'number' && line.product.quantity <= 5 ? ` · ${tr('only {count} left', { count: line.product.quantity })}` : ''}</div>
+                              <strong>{line.product.name}</strong>{line.product.color && <span style={{ marginLeft: '0.4rem', fontSize: '0.78rem', color: '#6e1a3a' }}>({line.product.color})</span>}{line.kuchu && <div style={{ fontSize: '0.78rem', color: '#555' }}>Kuchu: {line.kuchu.name} (+₹{line.kuchu.price}){line.threadColor ? ` · Thread: ${line.threadColor}` : ''}</div>}
+                              <div style={{ fontSize: '0.85rem', color: '#666' }}>{tr('₹{price} each', { price: lineUnitPrice(line.product, line.kuchu) })}{typeof line.product.quantity === 'number' && line.product.quantity <= 5 ? ` · ${tr('only {count} left', { count: line.product.quantity })}` : ''}</div>
                               <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.4rem', marginTop: '0.4rem' }}>
-                                <button type="button" aria-label={`Decrease quantity of ${line.product.name}`} onClick={() => changeQuantity(line.product.id, -1)} style={{ width: '30px', height: '30px', cursor: 'pointer' }}>−</button>
+                                <button type="button" aria-label={`Decrease quantity of ${line.product.name}`} onClick={() => changeQuantity(lineKey(line), -1)} style={{ width: '30px', height: '30px', cursor: 'pointer' }}>−</button>
                                 <span aria-live="polite" style={{ minWidth: '1.5rem', textAlign: 'center', fontWeight: 'bold' }}>{line.quantity}</span>
-                                <button type="button" aria-label={`Increase quantity of ${line.product.name}`} disabled={line.quantity >= maxOrderable(line.product)} onClick={() => changeQuantity(line.product.id, 1)} style={{ width: '30px', height: '30px', cursor: line.quantity >= maxOrderable(line.product) ? 'not-allowed' : 'pointer' }}>+</button>
-                                <button type="button" onClick={() => removeFromCart(line.product.id)} style={{ marginLeft: '0.4rem', background: 'none', border: 'none', color: '#8b1e2d', textDecoration: 'underline', cursor: 'pointer' }}>{tr('Remove')}</button>
+                                <button type="button" aria-label={`Increase quantity of ${line.product.name}`} disabled={line.quantity >= maxOrderable(line.product)} onClick={() => changeQuantity(lineKey(line), 1)} style={{ width: '30px', height: '30px', cursor: line.quantity >= maxOrderable(line.product) ? 'not-allowed' : 'pointer' }}>+</button>
+                                <button type="button" onClick={() => removeFromCart(lineKey(line))} style={{ marginLeft: '0.4rem', background: 'none', border: 'none', color: '#8b1e2d', textDecoration: 'underline', cursor: 'pointer' }}>{tr('Remove')}</button>
                               </div>
                             </div>
-                            <div style={{ fontWeight: 'bold', color: '#6e1a3a' }}>₹{unitPrice(line.product) * line.quantity}</div>
+                            <div style={{ fontWeight: 'bold', color: '#6e1a3a' }}>₹{lineUnitPrice(line.product, line.kuchu) * line.quantity}</div>
                           </div>
                         ))}
                       </div>
@@ -2370,9 +2677,9 @@ export default function App() {
                     {cart.length === 0 ? (
                       <p style={{ margin: '0.4rem 0 0' }}>{tr('Your cart is empty.')}</p>
                     ) : cart.map(line => (
-                      <div key={line.product.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.35rem' }}>
-                        <span>{line.product.name} × {line.quantity}</span>
-                        <span>₹{unitPrice(line.product) * line.quantity}</span>
+                      <div key={lineKey(line)} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.35rem' }}>
+                        <span>{line.product.name}{line.product.color ? ` (${line.product.color})` : ''} × {line.quantity}</span>
+                        <span>₹{lineUnitPrice(line.product, line.kuchu) * line.quantity}</span>
                       </div>
                     ))}
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.5rem', fontWeight: 'bold' }}>
@@ -2457,6 +2764,33 @@ export default function App() {
                         <p style={{ marginTop: 0, fontSize: '0.9rem' }}>{tr('Scan the payment QR provided by the host, pay, then attach the screenshot from your payment app. We will read the 12-digit UTR from it for you to check.')}</p>
                         <UpiPayBox upiId={upiId} payeeName={payeeName} amount={cartTotal} note="Mala Royale order" fallbackQrUrl={paymentQrUrl} tr={tr} />
                       </div>
+                      <fieldset style={{ margin: '0.6rem 0', padding: '0.7rem', border: '1px solid #ddd', borderRadius: '8px', display: 'grid', gap: '0.45rem', fontSize: '0.88rem' }}>
+                        <legend style={{ fontWeight: 'bold', padding: '0 0.3rem' }}>{tr('Order updates (optional)')}</legend>
+                        <input type="email" aria-label={tr('Email for updates')} placeholder={tr('Your email (Gmail)')} value={contactEmail} onChange={event => setContactEmail(event.target.value)} style={{ padding: '0.5rem' }} />
+                        <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={consentEmail} onChange={event => setConsentEmail(event.target.checked)} />
+                          {tr('Email me updates about this order')}
+                        </label>
+                        <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={consentWhatsapp} onChange={event => setConsentWhatsapp(event.target.checked)} />
+                          {tr('WhatsApp me updates about this order on')} {address.phone || tr('my phone number')}
+                        </label>
+                        <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={consentPromos} onChange={event => setConsentPromos(event.target.checked)} />
+                          {tr('Also send me offers and new arrivals')}
+                        </label>
+                        <small style={{ color: '#666' }}>{tr('We use these only for your order and, if you ticked it, offers. You can ask us to stop at any time.')}</small>
+                      </fieldset>
+                      {cartHasKuchu && (
+                        <label style={{ display: 'grid', gap: '0.4rem', margin: '0.6rem 0', padding: '0.7rem', background: '#fdecea', border: '1px solid #f5b5bd', borderRadius: '8px', fontSize: '0.88rem', cursor: 'pointer' }}>
+                          <strong style={{ color: '#8b1e2d' }}>{tr(FINAL_SALE_HEADLINE)}</strong>
+                          <span>{tr(FINAL_SALE_DETAIL)}</span>
+                          <span style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <input type="checkbox" checked={finalSaleAccepted} onChange={event => setFinalSaleAccepted(event.target.checked)} required />
+                            {tr('I understand and accept this final-sale rule.')}
+                          </span>
+                        </label>
+                      )}
                       <PaymentProofCapture file={paymentProof} onFile={setPaymentProof} utr={utr} onUtr={setUtr} expectedAmount={cartTotal} onCheck={setProofCheck} label={tr('Payment screenshot (PhonePe, GPay, Paytm or bank app)')} />
                       <button type="submit" disabled={firebaseLoading || uploadingProof} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}>{uploadingProof ? tr('Uploading screenshot...') : t.placeOrder}</button>
                     </form>
@@ -2510,7 +2844,7 @@ export default function App() {
                       </div>
                     )}
                     <ReportPaymentIssue order={ord} onSubmit={handleReportPaymentIssue} whatsappUrl={hostWhatsApp ? whatsAppLink(hostWhatsApp, `Hello Mala Royale, I have a problem with the payment for order ${ord.orderId}.`) : undefined} />
-                    {ord.stage === 'NOT_ACCEPTED' && (
+                    {(ord.stage === 'NOT_ACCEPTED' || (ord.refundDue || 0) > 0) && (
                       <RefundPrompt order={ord} onSubmit={handleSubmitRefund} validate={validateRefundDetails} />
                     )}
                     {open && (
@@ -2522,15 +2856,9 @@ export default function App() {
                         <p style={{ margin: '0.3rem 0 0', whiteSpace: 'pre-wrap' }}>{ord.hostMessage}</p>
                       </div>
                     )}
-                    <ul style={{ margin: '0.8rem 0', paddingLeft: '1.2rem' }}>
-                      {ord.items.map((item, index) => (
-                        <li key={`${item.productId}-${index}`} style={{ marginBottom: '0.25rem' }}>
-                          {item.name} × {item.quantity} <span style={{ color: '#555' }}>₹{item.price * item.quantity}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    <OrderLines items={ord.items} />
                     {ord.itemPayment && <div style={{ margin: '0.4rem 0' }}><PaymentProofView url={ord.itemPayment.screenshotUrl} caption={tr('Your payment screenshot')} /></div>}
-                    <p style={{ margin: '0.4rem 0', fontWeight: 'bold' }}>{tr('Order total: ₹')}{ord.itemTotal}</p>
+                    <p style={{ margin: '0.4rem 0', fontWeight: 'bold' }}>{tr('Order total: ₹')}{acceptedTotal(ord)}{(ord.rejectedTotal || 0) > 0 && <span style={{ color: '#8b1e2d', fontWeight: 'normal' }}> ({tr('₹')}{ord.rejectedTotal} {tr('of your items were rejected; originally ₹')}{ord.itemTotal})</span>}</p>
                     <p style={{ margin: '0.4rem 0', color: '#666', fontSize: '0.85rem' }}>{tr('Last updated')} {new Date(ord.updatedAt).toLocaleString()}</p>
                     <div style={{ margin: '0.7rem 0', padding: '0.75rem', backgroundColor: '#f7f2ef', borderRadius: '6px' }}>
                       <strong>{tr('Delivery address submitted')}</strong>
@@ -2659,6 +2987,7 @@ export default function App() {
           </button>
         </div>
       )}
+      {notifyNote && <div role="status" style={{ position: 'fixed', top: '1rem', right: '1rem', zIndex: 1100, background: '#1b5e20', color: '#fff', padding: '0.6rem 0.9rem', borderRadius: '8px', boxShadow: '0 4px 14px rgba(0,0,0,0.25)', maxWidth: '320px', fontSize: '0.9rem' }}>{notifyNote}</div>}
       {acceptDialog && (
         <ConfirmDialog
           title={acceptDialog.title}

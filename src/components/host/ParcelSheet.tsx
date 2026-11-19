@@ -1,3 +1,4 @@
+import { acceptedTotal, activeLines } from '../../domain/orderItems';
 import React, { useEffect, useState } from 'react';
 import { Order, CustomerAddress, ParcelParty } from '../../domain/types';
 import { getOrderStatus } from '../../app/utils';
@@ -108,8 +109,8 @@ export default function ParcelSheet({
     y += 7;
     pdf.setFont('helvetica', 'normal');
     pdf.setFontSize(10);
-    order.items.forEach(item => {
-      const lines = pdf.splitTextToSize(`${item.name}  x${item.quantity}  Rs ${item.price * item.quantity}`, 170);
+    activeLines(order).forEach(item => {
+      const lines = pdf.splitTextToSize(`${item.name}${item.color ? ` (${item.color})` : ''}${item.itemCode ? ` [${item.itemCode}]` : ''}${item.kuchuName ? ` + Kuchu ${item.kuchuName}${item.threadColor ? ` (thread ${item.threadColor})` : ''}` : ''}  x${item.quantity}  Rs ${item.price * item.quantity}`, 170);
       if (y + lines.length * 5 > 275) {
         pdf.addPage();
         y = 18;
@@ -119,7 +120,7 @@ export default function ParcelSheet({
     });
     y += 3;
     pdf.setFont('helvetica', 'bold');
-    pdf.text(`Items total: Rs ${order.itemTotal}`, left, y);
+    pdf.text(`Items total: Rs ${acceptedTotal(order)}`, left, y);
     if (order.courierBill) pdf.text(`Courier charge: Rs ${order.courierBill.amount}`, 110, y);
     pdf.save(`parcel-${order.orderId}.pdf`);
   };

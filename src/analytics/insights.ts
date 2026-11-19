@@ -1,3 +1,4 @@
+import { acceptedTotal } from '../domain/orderItems';
 import type { Enquiry, Order, Product } from '../domain/types';
 import {
   DAY_MS,
@@ -131,7 +132,7 @@ export function computeMetrics(data: DataSnapshot): Metrics {
   const productsById = new Map(products.map(product => [product.id, product] as const));
   const sales = orders.filter(isSaleOrder);
   const timeOf = (order: Order) => Date.parse(order.createdAt) || 0;
-  const sumItems = (list: Order[]) => list.reduce((total, order) => total + order.itemTotal, 0);
+  const sumItems = (list: Order[]) => list.reduce((total, order) => total + acceptedTotal(order), 0);
 
   const stats = new Map<string, ProductStat>();
   products.forEach(product => stats.set(product.id, {
@@ -178,13 +179,13 @@ export function computeMetrics(data: DataSnapshot): Metrics {
     });
 
     const district = order.address.district || order.address.taluk || order.address.pincode || 'Unknown';
-    bump(districtMap, district, order.itemTotal, order.items.reduce((count, item) => count + item.quantity, 0), 1);
+    bump(districtMap, district, acceptedTotal(order), order.items.reduce((count, item) => count + item.quantity, 0), 1);
 
     const customer = customerMap.get(order.userId) ?? {
       userId: order.userId, name: order.address.fullName, phone: order.address.phone, orders: 0, spend: 0, lastAt: 0,
     };
     customer.orders += 1;
-    customer.spend += order.itemTotal;
+    customer.spend += acceptedTotal(order);
     customer.lastAt = Math.max(customer.lastAt, at);
     customer.name = order.address.fullName;
     customerMap.set(order.userId, customer);

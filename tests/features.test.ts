@@ -249,3 +249,135 @@ describe('delivery address needs state and country', () => {
     expect(missingAddressFields({ ...full, pincode: '58002' })).toEqual(['pincode']);
   });
 });
+
+import { PALETTE, buildItemCode, categoryCodeFor, colorCodeFor, designKeyFor, groupVariants, isValidItemCode, itemCodeTaken, suggestColors } from '../src/domain/itemCode';
+import { acceptedTotal, activeLines, activeQuantityByProduct, rejectLine, rejectedTotal } from '../src/domain/orderItems';
+
+describe('item IDs', () => {
+  it('builds the two example formats', () => {
+    expect(buildItemCode({ category: 'silk', pattern: 'zri', color: 'mar', kuchu: 'kch03', size: '6.3m' })).toBe('SILK-ZRI-MAR-KCH03-63M');
+    expect(buildItemCode({ category: 'SILK', pattern: 'ZRI', color: 'MAR', size: '63M' })).toBe('SILK-ZRI-MAR-63M');
+  });
+  it('validates the shape and finds duplicates', () => {
+    expect(isValidItemCode('SILK-ZRI-MAR-63M')).toBe(true);
+    expect(isValidItemCode('SILK-ZRI-MAR-KCH03-63M')).toBe(true);
+    expect(isValidItemCode('SILK-ZRI')).toBe(false);
+    expect(isValidItemCode('silk-zri-mar-63m')).toBe(false);
+    expect(itemCodeTaken('silk-zri-mar-63m', [{ id: 'p1', itemCode: 'SILK-ZRI-MAR-63M' } as any])).toBe(true);
+    expect(itemCodeTaken('SILK-ZRI-MAR-63M', [{ id: 'p1', itemCode: 'SILK-ZRI-MAR-63M' } as any], 'p1')).toBe(false);
+  });
+  it('makes colour and category codes', () => {
+    expect(colorCodeFor('Maroon')).toBe('MAR');
+    expect(colorCodeFor('Mint')).toBe('MIN');
+    expect(categoryCodeFor('Sarees')).toBe('SARE');
+  });
+});
+
+describe('colour suggestions from a photo', () => {
+  const fill = (rgb: [number, number, number], count: number) => Array.from({ length: count }, () => [rgb[0], rgb[1], rgb[2], 255]).flat();
+  it('picks the saree colour and ignores a white background', () => {
+    const pixels = [...fill([250, 250, 250], 700), ...fill([128, 0, 20], 300)];
+    expect(suggestColors(pixels)[0].name).toBe('Maroon');
+  });
+  it('can suggest more than one colour, strongest first', () => {
+    const pixels = [...fill([30, 90, 180], 400), ...fill([201, 162, 39], 150)];
+    const names = suggestColors(pixels).map(color => color.name);
+    expect(names[0]).toBe('Blue');
+    expect(names.includes('Gold')).toBe(true);
+    expect(PALETTE.length > 20).toBe(true);
+  });
+});
+
+describe('variants of one design', () => {
+  it('groups by design key and keeps single items alone', () => {
+    const products = [
+      { id: 'a', designKey: designKeyFor('SILK', 'ZRI'), color: 'Maroon' },
+      { id: 'b' },
+      { id: 'c', designKey: designKeyFor('SILK', 'ZRI'), color: 'Blue' },
+    ] as any[];
+    const groups = groupVariants(products);
+    expect(groups.length).toBe(2);
+    expect(groups[0].variants.map((p: any) => p.id)).toEqual(['a', 'c']);
+    expect(designKeyFor('SILK', '')).toBe('');
+  });
+});
+
+describe('rejecting selected items', () => {
+  const order = () => ({
+    stage: 'ORDER_RECEIVED',
+    itemTotal: 6000,
+    items: [
+      { productId: 'p1', name: 'Saree A', price: 2500, quantity: 1 },
+      { productId: 'p2', name: 'Saree B', price: 3000, quantity: 1 },
+      { productId: 'p3', name: 'Kuchu', price: 500, quantity: 1 },
+    ],
+  }) as any;
+  it('rejects one line and works out the refund', () => {
+    const result = rejectLine(order(), 1, 'Damaged piece', '', 'Asha', '2026-11-18T10:00:00Z');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.rejectedTotal).toBe(3000);
+      const updated = { ...order(), items: result.items };
+      expect(acceptedTotal(updated)).toBe(3000);
+      expect(activeLines(updated).length).toBe(2);
+      expect(rejectedTotal(updated)).toBe(3000);
+      expect(activeQuantityByProduct(updated)).toEqual([['p1', 1], ['p3', 1]]);
+    }
+  });
+  it('refuses the last item, repeats and dispatched orders', () => {
+    let current = order();
+    const first = rejectLine(current, 0, 'x', '', 'a', 'now');
+    if (first.ok) current = { ...current, items: first.items };
+    const second = rejectLine(current, 1, 'x', '', 'a', 'now');
+    if (second.ok) current = { ...current, items: second.items };
+    expect(rejectLine(current, 2, 'x', '', 'a', 'now').ok).toBe(false);
+    expect(rejectLine(current, 0, 'x', '', 'a', 'now').ok).toBe(false);
+    expect(rejectLine({ ...order(), stage: 'SUBMITTED_FOR_DISPATCH' }, 0, 'x', '', 'a', 'now').ok).toBe(false);
+  });
+});
+
+describe('customer update text after rejecting an item', () => {
+  it('names the rejected item, the reason and the refund', () => {
+    const order = {
+      orderId: 'MR-9', stage: 'ORDER_RECEIVED', isWithheld: false, address: { fullName: 'Asha' }, refundDue: 3000,
+      items: [{ productId: 'p1', name: 'Saree A', price: 2500, quantity: 1 }, { productId: 'p2', name: 'Saree B', color: 'Maroon', price: 3000, quantity: 1, status: 'REJECTED', rejectionReason: 'Damaged piece' }],
+    } as any;
+    const text = customerUpdateText(order);
+    expect(text.includes('Saree B (Maroon)')).toBe(true);
+    expect(text.includes('Damaged piece')).toBe(true);
+    expect(text.includes('refund ₹3000')).toBe(true);
+  });
+});
+
+import { compatibleKuchu, itemCodeWithKuchu, lineKey, lineRegularPrice, lineUnitPrice, validateKuchuId } from '../src/domain/kuchu';
+
+describe('Kuchu pricing, IDs and cart lines', () => {
+  const saree = { id: 'p1', price: 4000, offerPrice: 3500, compatibleKuchuIds: ['KCH01', 'KCH03'] } as any;
+  const kuchus = [
+    { id: 'KCH01', name: 'Peacock', price: 400, active: true, photos: [] },
+    { id: 'KCH02', name: 'Mango', price: 350, active: true, photos: [] },
+    { id: 'KCH03', name: 'Lotus', price: 450, active: false, photos: [] },
+  ] as any[];
+  it('adds the Kuchu price to the saree price and goes back without it', () => {
+    expect(lineUnitPrice(saree, kuchus[0])).toBe(3900);
+    expect(lineUnitPrice(saree, null)).toBe(3500);
+    expect(lineRegularPrice(saree, kuchus[0])).toBe(4400);
+  });
+  it('offers only tagged, visible designs', () => {
+    expect(compatibleKuchu(saree, kuchus).map((k: any) => k.id)).toEqual(['KCH01']);
+  });
+  it('puts the Kuchu before the size in the item ID', () => {
+    expect(itemCodeWithKuchu('SILK-ZRI-MAR-63M', 'KCH03')).toBe('SILK-ZRI-MAR-KCH03-63M');
+    expect(itemCodeWithKuchu(undefined, 'KCH03')).toBe('');
+  });
+  it('validates unique alphanumeric Kuchu IDs', () => {
+    expect(validateKuchuId('KCH03', [])).toBe('');
+    expect(validateKuchuId('kch', [])).not.toBe('');
+    expect(validateKuchuId('KCH01', kuchus)).not.toBe('');
+    expect(validateKuchuId('KCH01', kuchus, 'KCH01')).toBe('');
+  });
+  it('keeps the same saree with different Kuchu or thread as separate cart lines', () => {
+    expect(lineKey({ product: saree })).not.toBe(lineKey({ product: saree, kuchu: kuchus[0], threadColor: 'Gold' }));
+    expect(lineKey({ product: saree, kuchu: kuchus[0], threadColor: 'Gold' })).toBe(lineKey({ product: saree, kuchu: kuchus[0], threadColor: 'Gold' }));
+  });
+});

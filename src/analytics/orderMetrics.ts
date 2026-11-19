@@ -1,3 +1,4 @@
+import { acceptedTotal } from '../domain/orderItems';
 import type { Order, Product } from '../domain/types';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -22,7 +23,7 @@ export function orderOfferAmount(order: Order, productsById?: Map<string, Produc
 
 export const orderCourierAmount = (order: Order): number => order.courierBill?.amount ?? 0;
 
-export const orderGrandTotal = (order: Order): number => order.itemTotal + orderCourierAmount(order);
+export const orderGrandTotal = (order: Order): number => acceptedTotal(order) + orderCourierAmount(order);
 
 export function orderStageLabel(order: Order): string {
   if (order.stage === 'NOT_ACCEPTED') return 'Not accepted';
@@ -46,7 +47,7 @@ export function formatAddress(order: Order): string {
 }
 
 export function describeItems(order: Order): string {
-  return order.items.map(item => `${item.name} x${item.quantity} @ ₹${item.price}`).join('; ');
+  return order.items.map(item => `${item.name}${item.color ? ` (${item.color})` : ''}${item.itemCode ? ` [${item.itemCode}]` : ''}${item.kuchuName ? ` + Kuchu ${item.kuchuName}${item.threadColor ? ` / thread ${item.threadColor}` : ''}` : ''} x${item.quantity} @ ₹${item.price}${item.status === 'REJECTED' ? ' REJECTED' : ''}`).join('; ');
 }
 
 /** When a product was added. Newer products store createdAt; older ones carry it in their id (p-<milliseconds>). */

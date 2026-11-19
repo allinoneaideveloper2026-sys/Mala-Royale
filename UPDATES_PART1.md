@@ -30,3 +30,25 @@ Checkout and the courier payment form require a payment screenshot. The 12-digit
 - Delete Row in Order History and Master Ledger (hidden, restorable by the developer; permanent delete is developer only).
 - Courier rules A, B, C with host settings and a re-check on the host side.
 Still to come: item IDs and colour variants, partial item rejection, Kuchu catalogue, notifications.
+
+## Part 2, batch 2
+- Item IDs: CATEGORY-PATTERN-COLOR-KUCHU-SIZE (e.g. SILK-ZRI-MAR-KCH03-63M, or SILK-ZRI-MAR-63M without Kuchu). Built from parts at upload, editable in the inventory, unique.
+- Colour variants: colour field with suggestions read from the first photo; "Add another colour of this design"; the storefront groups products with the same category code + pattern code as one listing with colour choices.
+- The chosen colour, item ID and photo are saved on each order line, and shown (photo, name, colour) to the customer and in the host's order cards, parcel sheet and ledger text.
+- Reject selected items: each active order line has "Reject item" for the host (before dispatch). Stock goes back, the refund amount is worked out, the customer is asked for refund details, totals and the ledger use the accepted amount. The last item cannot be rejected this way (reject the whole order).
+- Publish the new firestore.rules (partial refund details).
+
+## Part 2, batch 3 (Kuchu)
+- Inventory edit now sets Category code and Pattern code (and the design key), so older products can be grouped as colours of one design.
+- Upload Kuchu Section (Upload tab): unique alphanumeric ID, name, price, up to 8 photos. List with Edit, Hide/Show and Delete.
+- Tag compatible Kuchu designs and thread colours on a saree (upload form and inventory edit).
+- Customers choose "No Kuchu" or exactly one design (radio buttons). The price shown is saree + Kuchu, and goes back when "No Kuchu" is chosen. A thread colour is required when a Kuchu is chosen.
+- Final-sale rule shown on sarees with Kuchu options and accepted at checkout (NO RETURN, NO REFUND once confirmed; host-rejected or cancelled orders are still refunded).
+- Order lines keep the Kuchu, thread colour and the item ID with Kuchu (e.g. SILK-ZRI-MAR-KCH03-63M). The server check now rejects an order whose prices do not match the live catalog.
+- Publish the new firestore.rules (kuchu collection).
+
+## Part 2, batch 4 (notifications)
+- Checkout consent: email updates, WhatsApp updates, offers (consent_email, consent_whatsapp, consent_promos) stored on the order.
+- worker/notificationService.ts with adapters: Gmail script (free), Resend, WhatsApp Cloud API. All OFF by default (wrangler.jsonc).
+- Events: order placed, courier quote added, payment verified, dispatched, delivered, cancelled, item rejected. Duplicates are blocked.
+- Setup guide: docs/gmail-notifier.gs and DEPLOY_CLOUDFLARE.md. Publish the new firestore.rules (notificationLog).

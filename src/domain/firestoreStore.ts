@@ -19,11 +19,13 @@ import { CONFIG } from '../config';
 import { loadWithCache, writeCache } from './cache';
 import { validateRefundDetails } from './refund';
 import { isValidUpiId } from './upi';
+import { designKeyFor } from './itemCode';
+import { activeQuantityByProduct, rejectLine } from './orderItems';
 import { DEFAULT_SHIPPING, type CourierDecision, type ShippingConfig } from './shipping';
 import { isValidUtr, validateProofFile } from './paymentProof';
 import { compressImage } from '../app/imageCompress';
 import { firestore } from '../firebase';
-import { CourierBill, CustomerAddress, Enquiry, Feedback, FeedbackSentiment, Order, ParcelDetails, PaymentRecord, PincodeCheck, Product, ProductMedia, ProofCheckResult, ProductStatus, SavedDeliveryAddress } from './types';
+import { CourierBill, CustomerAddress, Enquiry, Feedback, FeedbackSentiment, Order, ParcelDetails, PaymentRecord, Consent, KuchuDesign, PincodeCheck, Product, ProductMedia, ProofCheckResult, ProductStatus, SavedDeliveryAddress } from './types';
 
 export function requireFirestore(): Firestore {
   if (!firestore) throw new Error('Firebase is not configured. Add the VITE_FIREBASE_* settings first.');
@@ -104,6 +106,57 @@ export function subscribeProducts(
   }, onError);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Kuchu designs: a common list that sarees can be tagged with. Customers read it (cached); staff see changes live.
+// ---------------------------------------------------------------------------------------------
+export function subscribeKuchu(onChange: (list: KuchuDesign[]) => void, onError: (error: Error) => void, options: { live?: boolean } = {}) {
+  const db = requireFirestore();
+  const read = (docs: Array<{ id: string; data: () => unknown }>) => docs.map(item => ({ ...(item.data() as object), id: item.id } as KuchuDesign))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (!options.live) {
+    return loadWithCache<KuchuDesign[]>({
+      key: 'kuchu',
+      ttlMs: PUBLIC_CACHE_TTL_MS,
+      load: async () => read((await getDocs(collection(db, 'kuchu'))).docs),
+      onChange,
+      onError,
+    });
+  }
+  return onSnapshot(collection(db, 'kuchu'), snapshot => {
+    const list = read(snapshot.docs);
+    writeCache('kuchu', list);
+    onChange(list);
+  }, onError);
+}
+
+/** Reads the Kuchu list straight from Firestore (after a price or availability conflict at checkout). */
+export async function refreshKuchuFresh(): Promise<KuchuDesign[]> {
+  const db = requireFirestore();
+  const snapshot = await getDocs(collection(db, 'kuchu'));
+  const list = snapshot.docs.map(item => ({ ...(item.data() as object), id: item.id } as KuchuDesign)).sort((left, right) => left.id.localeCompare(right.id));
+  writeCache('kuchu', list);
+  return list;
+}
+
+export async function publishKuchu(kuchu: KuchuDesign): Promise<void> {
+  const db = requireFirestore();
+  const ref = doc(db, 'kuchu', kuchu.id);
+  await runTransaction(db, async transaction => {
+    if ((await transaction.get(ref)).exists()) throw new Error(`Kuchu ID ${kuchu.id} is already used.`);
+    transaction.set(ref, kuchu);
+  });
+}
+
+export async function updateKuchu(id: string, changes: { name: string; price: number; active: boolean }): Promise<void> {
+  const db = requireFirestore();
+  await updateDoc(doc(db, 'kuchu', id), { name: changes.name, price: changes.price, active: changes.active });
+}
+
+export async function deleteKuchu(id: string): Promise<void> {
+  const db = requireFirestore();
+  await deleteDoc(doc(db, 'kuchu', id));
+}
+
 export async function seedInitialProducts(products: Product[]): Promise<void> {
   const db = requireFirestore();
   const existing = await getDocs(collection(db, 'products'));
@@ -123,10 +176,21 @@ export async function publishProduct(product: Product): Promise<void> {
 
 export async function updateProduct(
   productId: string,
-  changes: { name: string; category: string; price: number; offerPrice?: number; quantity: number; status: ProductStatus },
+  changes: { name: string; category: string; price: number; offerPrice?: number; quantity: number; status: ProductStatus; itemCode?: string; color?: string; colorCode?: string; size?: string; categoryCode?: string; patternCode?: string; compatibleKuchuIds?: string[]; threadColors?: string[] },
 ): Promise<void> {
   const db = requireFirestore();
+  const designKey = designKeyFor(changes.categoryCode || '', changes.patternCode || '');
   await updateDoc(doc(db, 'products', productId), {
+    ...(changes.categoryCode !== undefined || changes.patternCode !== undefined ? {
+      categoryCode: changes.categoryCode ? changes.categoryCode : deleteField(),
+      patternCode: changes.patternCode ? changes.patternCode : deleteField(),
+      designKey: designKey ? designKey : deleteField(),
+    } : {}),
+    ...(changes.compatibleKuchuIds !== undefined ? { compatibleKuchuIds: changes.compatibleKuchuIds } : {}),
+    ...(changes.threadColors !== undefined ? { threadColors: changes.threadColors } : {}),
+    ...(changes.itemCode ? { itemCode: changes.itemCode } : {}),
+    ...(changes.color !== undefined ? { color: changes.color, colorCode: changes.colorCode || '' } : {}),
+    ...(changes.size !== undefined ? { size: changes.size } : {}),
     name: changes.name,
     category: changes.category,
     price: changes.price,
@@ -329,6 +393,8 @@ export async function createCloudOrder(
   proofFingerprint = '',
   proofCheck?: ProofCheckResult,
   courierDecision?: CourierDecision,
+  finalSaleAcceptedAt?: string,
+  consent?: Consent,
 ): Promise<Order> {
   const db = requireFirestore();
   if (!courierNoticeAccepted) throw new Error('Courier charge notice must be accepted prior to order placement.');
@@ -349,7 +415,11 @@ export async function createCloudOrder(
     verified: false,
     ...(proofCheck ? { proofCheck } : {}),
   };
-  const courierFields = courierDecision ? { courierRule: courierDecision.rule, courierWaived: courierDecision.waived, courierRuleReason: courierDecision.reason } : {};
+  const courierFields = {
+    ...(courierDecision ? { courierRule: courierDecision.rule, courierWaived: courierDecision.waived, courierRuleReason: courierDecision.reason } : {}),
+    ...(finalSaleAcceptedAt ? { finalSaleAcceptedAt } : {}),
+    ...(consent ? { consent } : {}),
+  };
   const order: Order = {
     orderId,
     userId,
@@ -373,6 +443,33 @@ export async function createCloudOrder(
     if (existingProof?.exists()) throw new Error('This payment screenshot was already used for another order. Please attach your own payment screenshot.');
 
     const productSnapshots = await Promise.all(stockEntries.map(([productId]) => transaction.get(doc(db, 'products', productId))));
+    const kuchuIds = Array.from(new Set(items.map(item => item.kuchuId).filter((id): id is string => Boolean(id))));
+    const kuchuSnapshots = await Promise.all(kuchuIds.map(id => transaction.get(doc(db, 'kuchu', id))));
+    const kuchuById = new Map<string, KuchuDesign>();
+    kuchuSnapshots.forEach(snapshot => { if (snapshot.exists()) kuchuById.set(snapshot.id, snapshot.data() as KuchuDesign); });
+    const productById = new Map<string, Product>();
+    productSnapshots.forEach(snapshot => { if (snapshot.exists()) productById.set(snapshot.id, snapshot.data() as Product); });
+
+    // The price on every line must match the live catalog (saree price after offer, plus the chosen Kuchu).
+    let checkedTotal = 0;
+    for (const line of items) {
+      const product = productById.get(line.productId);
+      if (!product) continue; // missing products are reported below
+      let expected = product.offerPrice || product.price;
+      if (line.kuchuId) {
+        const kuchu = kuchuById.get(line.kuchuId);
+        if (!kuchu || kuchu.active === false || !(product.compatibleKuchuIds || []).includes(line.kuchuId)) {
+          throw new Error(`The Kuchu design for "${product.name}" is no longer available. Please choose again.`);
+        }
+        if (line.threadColor && !(product.threadColors || []).includes(line.threadColor)) {
+          throw new Error(`The thread colour for "${product.name}" is no longer available. Please choose again.`);
+        }
+        expected += kuchu.price;
+      }
+      if (Math.abs(line.price - expected) > 0.005) throw new Error(`The price of "${product.name}" has changed. Please check your cart and try again.`);
+      checkedTotal += line.price * line.quantity;
+    }
+    if (Math.abs(checkedTotal - itemTotal) > 0.005) throw new Error('Your cart total does not match the current prices. Please check your cart and try again.');
     const reservations: Array<{ ref: DocumentReference; quantity: number }> = [];
     productSnapshots.forEach((productSnapshot, index) => {
       if (!productSnapshot.exists()) {
@@ -426,7 +523,7 @@ export async function verifyCloudPayment(orderId: string, kind: 'ITEM' | 'COURIE
     // New orders already blocked their stock when they were placed. Older orders are reduced here, as before.
     const stockUpdates: Array<{ ref: DocumentReference; quantity: number }> = [];
     if (kind === 'ITEM' && !order.stockReserved) {
-      const entries = totalsByProduct(order.items);
+      const entries = activeQuantityByProduct(order);
       const productSnapshots = await Promise.all(entries.map(([productId]) => transaction.get(doc(db, 'products', productId))));
       productSnapshots.forEach((productSnapshot, index) => {
         if (!productSnapshot.exists()) return;
@@ -519,6 +616,40 @@ export async function releaseCloudOrderHold(orderId: string): Promise<void> {
   await updateDoc(doc(db, 'orders', orderId), { isWithheld: false, holdReason: '', holdNote: '', updatedAt: new Date().toISOString() });
 }
 
+// Rejects one item of an order (for example a damaged piece) without cancelling the rest.
+// The item's stock is put back and the amount to refund is worked out; the customer is asked for refund details.
+export async function rejectCloudOrderItem(orderId: string, index: number, byNickname: string, reason: string, note: string): Promise<void> {
+  const db = requireFirestore();
+  const orderRef = doc(db, 'orders', orderId);
+  await runTransaction(db, async transaction => {
+    const snapshot = await transaction.get(orderRef);
+    if (!snapshot.exists()) throw new Error('Order not found.');
+    const order = snapshot.data() as Order;
+    const now = new Date().toISOString();
+    const result = rejectLine(order, index, reason, note, byNickname, now);
+    if ('error' in result) throw new Error(result.error);
+    const line = result.rejectedLine;
+
+    // Put this item's stock back (stock was blocked when the order was placed, or when payment was confirmed on older orders).
+    let restock: { ref: DocumentReference; quantity: number } | null = null;
+    if (order.stockReserved || order.itemPayment?.verified) {
+      const productRef = doc(db, 'products', line.productId);
+      const productSnapshot = await transaction.get(productRef);
+      if (productSnapshot.exists()) {
+        const quantity = (productSnapshot.data() as Product).quantity;
+        if (typeof quantity === 'number') restock = { ref: productRef, quantity: quantity + line.quantity };
+      }
+    }
+    transaction.update(orderRef, {
+      items: result.items,
+      rejectedTotal: result.rejectedTotal,
+      refundDue: order.itemPayment ? result.rejectedTotal : 0,
+      updatedAt: now,
+    });
+    if (restock) transaction.update(restock.ref, { quantity: restock.quantity });
+  });
+}
+
 export async function submitCloudOrderForDispatch(orderId: string): Promise<void> {
   const db = requireFirestore();
   const orderRef = doc(db, 'orders', orderId);
@@ -546,7 +677,7 @@ export async function markCloudOrderNotAccepted(orderId: string, reason = '', no
     // Put the blocked stock back (stock is blocked when the order is placed; older orders when payment was confirmed).
     const restocks: Array<{ ref: DocumentReference; quantity: number }> = [];
     if (order.stockReserved || order.itemPayment?.verified) {
-      const entries = totalsByProduct(order.items);
+      const entries = activeQuantityByProduct(order);
       const productSnapshots = await Promise.all(entries.map(([productId]) => transaction.get(doc(db, 'products', productId))));
       productSnapshots.forEach((productSnapshot, index) => {
         if (!productSnapshot.exists()) return;

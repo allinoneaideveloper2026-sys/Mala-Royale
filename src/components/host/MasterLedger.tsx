@@ -1,3 +1,4 @@
+import { acceptedTotal } from '../../domain/orderItems';
 import React, { useMemo, useState } from 'react';
 import type { Order, Product } from '../../domain/types';
 import {
@@ -93,7 +94,7 @@ export default function MasterLedger({ orders, products, onSaveDelivery, onDelet
   }, [orders, query, from, to, status]);
 
   const totals = useMemo(() => rows.reduce((sum, order) => ({
-    items: sum.items + order.itemTotal,
+    items: sum.items + acceptedTotal(order),
     offer: sum.offer + orderOfferAmount(order, productsById),
     courier: sum.courier + orderCourierAmount(order),
     grand: sum.grand + orderGrandTotal(order),
@@ -137,7 +138,7 @@ export default function MasterLedger({ orders, products, onSaveDelivery, onDelet
     ];
     const body = rows.map(order => [
       formatStamp(order.createdAt), order.orderId, order.address.fullName, order.address.phone, order.userId,
-      formatAddress(order), describeItems(order), order.itemTotal, orderOfferAmount(order, productsById),
+      formatAddress(order), describeItems(order), acceptedTotal(order), orderOfferAmount(order, productsById),
       orderCourierAmount(order), orderGrandTotal(order), orderStageLabel(order), partnerOf(order), commentsOf(order),
     ]);
     const today = new Date();
@@ -207,7 +208,7 @@ export default function MasterLedger({ orders, products, onSaveDelivery, onDelet
                   <td style={{ ...cellStyle, fontFamily: 'monospace', fontSize: '0.7rem', wordBreak: 'break-all', maxWidth: '130px' }}>{order.userId}</td>
                   <td style={{ ...cellStyle, minWidth: '220px' }}>{formatAddress(order)}</td>
                   <td style={{ ...cellStyle, minWidth: '240px' }}>{describeItems(order)}</td>
-                  <td style={{ ...cellStyle, textAlign: 'right' }}>{inr(order.itemTotal)}</td>
+                  <td style={{ ...cellStyle, textAlign: 'right' }}>{inr(acceptedTotal(order))}</td>
                   <td style={{ ...cellStyle, textAlign: 'right' }}>{inr(orderOfferAmount(order, productsById))}</td>
                   <td style={{ ...cellStyle, textAlign: 'right' }}>{order.courierBill ? inr(order.courierBill.amount) : '-'}</td>
                   <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold' }}>{inr(orderGrandTotal(order))}</td>

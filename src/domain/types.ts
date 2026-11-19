@@ -9,6 +9,17 @@ export type OrderStage =
   | 'NOT_ACCEPTED'
   | 'CANCELLED';
 
+/** What the customer agreed to at checkout. Messages are only sent for the channels they ticked. */
+export interface Consent {
+  consent_email: boolean;
+  consent_whatsapp: boolean;
+  consent_promos: boolean;
+  email?: string;
+  /** Digits with country code, for example 919876543210. */
+  whatsapp?: string;
+  at: string;
+}
+
 export interface HostRecord {
   email: string;
   /** Typed by the developer, for example H01. */
@@ -68,6 +79,32 @@ export interface Product {
   media?: ProductMedia[];
   quantity?: number;
   status?: ProductStatus;
+  createdAt?: string;
+  /** CATEGORY-PATTERN-COLOR-KUCHU-SIZE, for example SILK-ZRI-MAR-KCH03-63M. */
+  itemCode?: string;
+  categoryCode?: string;
+  patternCode?: string;
+  color?: string;
+  colorCode?: string;
+  size?: string;
+  kuchuCode?: string;
+  /** Products with the same design key are shown as colour variants of one listing. */
+  designKey?: string;
+  /** Kuchu designs the host tagged as compatible with this saree. */
+  compatibleKuchuIds?: string[];
+  /** Thread colours the customer can choose from with a Kuchu, based on the saree's colour combination. */
+  threadColors?: string[];
+}
+
+export interface KuchuDesign {
+  /** Unique letters and digits, also the document id (for example KCH03). */
+  id: string;
+  name: string;
+  price: number;
+  /** Several photos so customers can preview the design. */
+  photos: ProductMedia[];
+  /** Hidden designs are not offered to customers. */
+  active: boolean;
   createdAt?: string;
 }
 
@@ -143,11 +180,37 @@ export interface CourierBill {
   amount: number;
 }
 
+export interface OrderLine {
+  productId: string;
+  name: string;
+  price: number;
+  regularPrice?: number;
+  quantity: number;
+  /** The colour, item ID and photo the customer chose, kept on the order. */
+  color?: string;
+  itemCode?: string;
+  image?: string;
+  /** Kuchu chosen with this saree, and the thread colour (the price already includes the Kuchu). */
+  kuchuId?: string;
+  kuchuName?: string;
+  kuchuPrice?: number;
+  threadColor?: string;
+  status?: 'ACTIVE' | 'REJECTED';
+  rejectionReason?: string;
+  rejectionNote?: string;
+  rejectedAt?: string;
+  rejectedBy?: string;
+}
+
 export interface Order {
   orderId: string;
   userId: string;
-  items: Array<{ productId: string; name: string; price: number; regularPrice?: number; quantity: number }>;
+  items: OrderLine[];
   itemTotal: number;
+  /** Value of items the host rejected one by one (see items[].status). */
+  rejectedTotal?: number;
+  /** Amount to refund for rejected items; the customer is asked for refund details. */
+  refundDue?: number;
   stage: OrderStage;
   isWithheld: boolean;
   courierNoticeAccepted: boolean;
@@ -167,6 +230,9 @@ export interface Order {
   courierRule?: 'A' | 'B' | 'C';
   courierWaived?: boolean;
   courierRuleReason?: string;
+  consent?: Consent;
+  /** When the customer accepted the final-sale rule (orders with a Kuchu). */
+  finalSaleAcceptedAt?: string;
   /** A deleted row is hidden from host screens; only the developer can restore or remove it for good. */
   deletedAt?: string;
   deletedBy?: string;

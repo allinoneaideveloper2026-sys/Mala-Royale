@@ -1,5 +1,5 @@
 import React from 'react';
-import { Product, ProductStatus } from '../domain/types';
+import { KuchuDesign, Product, ProductStatus } from '../domain/types';
 
 export const INITIAL_CATALOG: Product[] = [
   {
@@ -42,7 +42,7 @@ export type SortKey = 'featured' | 'newest' | 'price-asc' | 'price-desc' | 'disc
 export const DEFAULT_CATEGORIES = ['Sarees', 'Custom Kuchu'];
 export const NEW_CATEGORY_VALUE = '__new__';
 
-export type CartLine = { product: Product; quantity: number };
+export type CartLine = { product: Product; quantity: number; kuchu?: KuchuDesign; threadColor?: string };
 export const MAX_CART_QUANTITY = 10;
 export const unitPrice = (product: Product) => product.offerPrice || product.price;
 
