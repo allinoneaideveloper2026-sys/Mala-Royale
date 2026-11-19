@@ -1,12 +1,17 @@
 // Cloudflare Worker: the "server side" of Mala Royale. It serves the website files and handles /api/* requests.
 // Secrets and keys live in Cloudflare settings (never in the website code). See DEPLOY_CLOUDFLARE.md.
 import { buildVerdict, parseModelJson, sanitizeReading } from '../src/domain/proofVerdict';
+import { isNotifyEvent } from '../src/domain/notifications';
+import type { Order } from '../src/domain/types';
+import { createDocument, getDocument } from './firestoreRest';
+import { sendNotifications, type NotifyEnv } from './notificationService';
 
-interface Env {
+interface Env extends NotifyEnv {
   AI: { run: (model: string, input: unknown) => Promise<{ response?: unknown }> };
   ASSETS: { fetch: (request: Request) => Promise<Response> };
   FIREBASE_PROJECT_ID: string;
   DEVELOPER_EMAILS: string;
+  OWNER_EMAILS?: string;
 }
 
 const VISION_MODEL = '@cf/meta/llama-3.2-11b-vision-instruct';
@@ -18,7 +23,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 });
 
 // ---------- Firebase sign-in check (so only real visitors of the shop can use the AI) ----------
-interface TokenClaims { sub: string; email?: string }
+interface TokenClaims { sub: string; email?: string; token: string }
 let jwksCache: { at: number; keys: Array<JsonWebKey & { kid: string }> } | null = null;
 
 const b64urlToBytes = (value: string) => {
@@ -51,7 +56,7 @@ async function verifyFirebaseToken(request: Request, projectId: string): Promise
     const now = Math.floor(Date.now() / 1000);
     if (!valid || claims.aud !== projectId || claims.iss !== `https://securetoken.google.com/${projectId}`) return null;
     if (typeof claims.exp !== 'number' || claims.exp < now || typeof claims.sub !== 'string' || !claims.sub) return null;
-    return { sub: claims.sub, email: typeof claims.email === 'string' ? claims.email.toLowerCase() : undefined };
+    return { sub: claims.sub, email: typeof claims.email === 'string' ? claims.email.toLowerCase() : undefined, token };
   } catch {
     return null;
   }
@@ -128,6 +133,47 @@ async function acceptLicense(env: Env): Promise<Response> {
   }
 }
 
+// ---------- Notifications ----------
+const listOf = (value: string | undefined) => (value || '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean);
+
+/** A host is a configured owner or developer, or has an active host record (read with their own token). */
+async function isStaffMember(claims: TokenClaims, env: Env): Promise<boolean> {
+  const email = claims.email;
+  if (!email) return false;
+  if (listOf(env.DEVELOPER_EMAILS).includes(email) || listOf(env.OWNER_EMAILS).includes(email)) return true;
+  const record = await getDocument(env.FIREBASE_PROJECT_ID, `hostAccess/${encodeURIComponent(email)}`, claims.token);
+  return Boolean(record) && record?.active !== false;
+}
+
+async function notify(request: Request, env: Env, claims: TokenClaims): Promise<Response> {
+  let body: { orderId?: string; event?: string; force?: boolean };
+  try {
+    body = await request.json() as typeof body;
+  } catch {
+    return json({ ok: false, error: 'Invalid request.' }, 400);
+  }
+  const orderId = String(body.orderId || '');
+  if (!/^[A-Za-z0-9-]{4,40}$/.test(orderId) || !isNotifyEvent(body.event)) return json({ ok: false, error: 'Unknown order or event.' }, 400);
+  const event = body.event;
+
+  const staff = await isStaffMember(claims, env);
+  // Customers may only trigger the confirmation for their own new order.
+  if (!staff && event !== 'ORDER_PLACED') return json({ ok: false, error: 'Not allowed.' }, 403);
+
+  const data = await getDocument(env.FIREBASE_PROJECT_ID, `orders/${orderId}`, claims.token);
+  if (!data) return json({ ok: false, error: 'Order not found.' }, 404);
+  const order = data as unknown as Order;
+  if (!staff && order.userId !== claims.sub) return json({ ok: false, error: 'Not allowed.' }, 403);
+
+  // The first request for an order and event reserves it; repeats are skipped (staff can force a re-send).
+  const documentId = body.force && staff ? `${orderId}_${event}_${Date.now()}` : `${orderId}_${event}`;
+  const reserved = await createDocument(env.FIREBASE_PROJECT_ID, 'notificationLog', documentId, { orderId, event, by: claims.email || claims.sub, at: new Date().toISOString() }, claims.token);
+  if (!reserved) return json({ ok: true, duplicate: true, results: null });
+
+  const results = await sendNotifications({ env, event, order, fetchFn: (input, init) => fetch(input, init) });
+  return json({ ok: true, results });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -139,6 +185,7 @@ export default {
     if (!claims) return json({ ok: false, error: 'Please sign in again.' }, 401);
 
     if (url.pathname === '/api/read-proof' && request.method === 'POST') return readProof(request, env, claims.sub);
+    if (url.pathname === '/api/notify' && request.method === 'POST') return notify(request, env, claims);
 
     if (url.pathname === '/api/ai-license') {
       const developers = (env.DEVELOPER_EMAILS || '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean);

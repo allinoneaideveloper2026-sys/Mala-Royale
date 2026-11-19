@@ -60,7 +60,7 @@ export default function HostOrderActions({ order, canReject, onReject, onHold, o
   const buttonStyle = (background: string) => ({ padding: '0.5rem 1rem', background, color: '#fff', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' } as const);
 
   return (
-    <div style={{ marginTop: '0.9rem', padding: '0.8rem', borderRadius: '10px', background: '#faf6f8', border: '1px solid #eee', display: 'grid', gap: '0.9rem' }}>
+    <div style={{ marginTop: '0.9rem', padding: '0.8rem', borderRadius: '10px', background: 'var(--mr-tint)', border: '1px solid #eee', display: 'grid', gap: '0.9rem' }}>
       {isHeld && (
         <p role="status" style={{ margin: 0, padding: '0.5rem 0.7rem', background: '#fff3cd', border: '1px solid #ffe08a', borderRadius: '6px', fontSize: '0.88rem' }}>
           <strong>On hold:</strong> {order.holdReason || 'no reason recorded'}{order.holdNote ? ` · ${order.holdNote}` : ''}
@@ -81,7 +81,7 @@ export default function HostOrderActions({ order, canReject, onReject, onHold, o
           />
         </label>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center', marginTop: '0.4rem' }}>
-          <button type="button" disabled={!messageChanged || savingMessage} onClick={() => void saveMessage()} style={{ padding: '0.4rem 0.9rem', background: '#6e1a3a', color: '#fff', border: 'none', borderRadius: '4px', cursor: messageChanged ? 'pointer' : 'not-allowed', opacity: messageChanged ? 1 : 0.5 }}>
+          <button type="button" disabled={!messageChanged || savingMessage} onClick={() => void saveMessage()} style={{ padding: '0.4rem 0.9rem', background: 'var(--mr-primary)', color: '#fff', border: 'none', borderRadius: '4px', cursor: messageChanged ? 'pointer' : 'not-allowed', opacity: messageChanged ? 1 : 0.5 }}>
             {savingMessage ? 'Saving...' : 'Send message'}
           </button>
           {phone.length >= 10 && (

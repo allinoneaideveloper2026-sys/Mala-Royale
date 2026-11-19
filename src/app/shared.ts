@@ -82,8 +82,8 @@ export const STATUS_COLORS: Record<ProductStatus, { backgroundColor: string; col
 
 export const mediaButtonStyle: React.CSSProperties = {
   backgroundColor: '#fff',
-  color: '#6e1a3a',
-  border: '1px solid #6e1a3a',
+  color: 'var(--mr-primary)',
+  border: '1px solid var(--mr-primary)',
   borderRadius: '20px',
   padding: '0.5rem 0.9rem',
   cursor: 'pointer',

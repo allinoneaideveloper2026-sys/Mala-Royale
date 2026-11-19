@@ -75,7 +75,7 @@ export default function RefundPrompt({
         style={{ padding: '0.55rem' }}
       />
       {error && <span role="alert" style={{ color: '#8b1e2d', fontSize: '0.85rem' }}>{error}</span>}
-      <button type="submit" disabled={busy} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 0, borderRadius: '6px', padding: '0.55rem 1rem', fontWeight: 'bold', cursor: 'pointer', justifySelf: 'start' }}>
+      <button type="submit" disabled={busy} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 0, borderRadius: '6px', padding: '0.55rem 1rem', fontWeight: 'bold', cursor: 'pointer', justifySelf: 'start' }}>
         {busy ? 'Saving...' : 'Send refund details'}
       </button>
     </form>

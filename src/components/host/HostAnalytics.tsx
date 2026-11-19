@@ -167,7 +167,7 @@ export default function HostAnalytics({ orders, products, enquiries, weights, on
         {stats.map(([label, value]) => (
           <div key={label} style={{ ...cardStyle, padding: '0.7rem' }}>
             <div style={{ fontSize: '0.75rem', color: '#777' }}>{label}</div>
-            <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#6e1a3a' }}>{value}</div>
+            <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--mr-primary)' }}>{value}</div>
           </div>
         ))}
       </div>
@@ -208,8 +208,8 @@ export default function HostAnalytics({ orders, products, enquiries, weights, on
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
                 <span>{category.label}</span><span>{inr(category.revenue)}</span>
               </div>
-              <div style={{ height: '8px', background: '#f1e6ea', borderRadius: '4px' }}>
-                <div style={{ width: `${(category.revenue / maxCategory) * 100}%`, height: '100%', background: '#6e1a3a', borderRadius: '4px' }} />
+              <div style={{ height: '8px', background: 'var(--mr-tint-strong)', borderRadius: '4px' }}>
+                <div style={{ width: `${(category.revenue / maxCategory) * 100}%`, height: '100%', background: 'var(--mr-primary)', borderRadius: '4px' }} />
               </div>
             </div>
           ))}
@@ -219,7 +219,7 @@ export default function HostAnalytics({ orders, products, enquiries, weights, on
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: '6px', height: '110px' }}>
             {metrics.weekdays.map((count, day) => (
               <div key={WEEKDAY_SHORT[day]} style={{ flex: 1, textAlign: 'center', fontSize: '0.7rem' }}>
-                <div style={{ height: `${(count / maxDay) * 80}px`, minHeight: count ? '4px' : '1px', background: '#6e1a3a', borderRadius: '3px 3px 0 0' }} title={`${count} orders`} />
+                <div style={{ height: `${(count / maxDay) * 80}px`, minHeight: count ? '4px' : '1px', background: 'var(--mr-primary)', borderRadius: '3px 3px 0 0' }} title={`${count} orders`} />
                 <div>{WEEKDAY_SHORT[day]}</div>
               </div>
             ))}
@@ -236,7 +236,7 @@ export default function HostAnalytics({ orders, products, enquiries, weights, on
         </div>
         <div style={{ display: 'grid', gap: '0.6rem', maxHeight: '360px', overflowY: 'auto', marginBottom: '0.7rem' }}>
           {turns.map(turn => (
-            <div key={turn.id} style={{ alignSelf: turn.role === 'host' ? 'end' : 'start', backgroundColor: turn.role === 'host' ? '#f1e6ea' : '#f5f8fa', borderRadius: '8px', padding: '0.6rem 0.8rem', whiteSpace: 'pre-wrap', fontSize: '0.88rem' }}>
+            <div key={turn.id} style={{ alignSelf: turn.role === 'host' ? 'end' : 'start', backgroundColor: turn.role === 'host' ? 'var(--mr-tint-strong)' : '#f5f8fa', borderRadius: '8px', padding: '0.6rem 0.8rem', whiteSpace: 'pre-wrap', fontSize: '0.88rem' }}>
               {turn.text}
               {turn.sources && turn.sources.length > 0 && (
                 <div style={{ marginTop: '0.4rem', fontSize: '0.72rem', color: '#777' }}>Based on: {turn.sources.join(' · ')}</div>
@@ -247,7 +247,7 @@ export default function HostAnalytics({ orders, products, enquiries, weights, on
         </div>
         <form onSubmit={(event: React.FormEvent) => { event.preventDefault(); void ask(question); }} style={{ display: 'flex', gap: '0.5rem' }}>
           <input aria-label="Ask a question about your business" value={question} onChange={event => setQuestion(event.target.value)} placeholder="e.g. Which saree should I restock first?" style={{ flex: 1, padding: '0.55rem' }} />
-          <button type="submit" disabled={thinking || !question.trim()} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', borderRadius: '4px', padding: '0.55rem 1rem', fontWeight: 'bold', cursor: 'pointer' }}>Ask</button>
+          <button type="submit" disabled={thinking || !question.trim()} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', borderRadius: '4px', padding: '0.55rem 1rem', fontWeight: 'bold', cursor: 'pointer' }}>Ask</button>
         </form>
       </div>
     </section>

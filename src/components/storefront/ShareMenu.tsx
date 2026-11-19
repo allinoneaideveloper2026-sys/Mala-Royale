@@ -46,7 +46,7 @@ export default function ShareMenu({ product, onClose }: ShareMenuProps) {
     { key: 'facebook', label: 'Facebook', glyph: 'f', color: '#1877f2', href: `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}` },
     { key: 'x', label: 'X', glyph: '𝕏', color: '#111111', href: `https://twitter.com/intent/tweet?text=${encodedText}&url=${encodedUrl}` },
     { key: 'pinterest', label: 'Pinterest', glyph: 'P', color: '#e60023', href: `https://pinterest.com/pin/create/button/?url=${encodedUrl}&media=${encodeURIComponent(image)}&description=${encodedText}` },
-    { key: 'email', label: tr('Email'), glyph: '✉', color: '#6e1a3a', href: `mailto:?subject=${encodeURIComponent(product.name)}&body=${encodeURIComponent(`${message}\n${url}`)}` },
+    { key: 'email', label: tr('Email'), glyph: '✉', color: 'var(--mr-primary)', href: `mailto:?subject=${encodeURIComponent(product.name)}&body=${encodeURIComponent(`${message}\n${url}`)}` },
     { key: 'sms', label: 'SMS', glyph: '✆', color: '#2e7d32', href: `sms:?&body=${encodeURIComponent(`${message} ${url}`)}` },
   ];
 
@@ -79,20 +79,20 @@ export default function ShareMenu({ product, onClose }: ShareMenuProps) {
     >
       <div onClick={event => event.stopPropagation()} className="mr-expand" style={{ width: '100%', maxWidth: '440px', maxHeight: '90vh', overflowY: 'auto', background: '#fff', borderRadius: '16px', padding: '1.3rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '1rem' }}>
-          <h3 style={{ margin: 0, color: '#6e1a3a' }}>{tr('Share this piece')}</h3>
+          <h3 style={{ margin: 0, color: 'var(--mr-primary)' }}>{tr('Share this piece')}</h3>
           <button type="button" aria-label={tr('Close')} onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', margin: '0.9rem 0', padding: '0.6rem', background: '#fbf3f6', borderRadius: '12px' }}>
+        <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', margin: '0.9rem 0', padding: '0.6rem', background: 'var(--mr-tint)', borderRadius: '12px' }}>
           <img src={image} alt="" width={56} height={56} style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '10px' }} />
           <div style={{ minWidth: 0 }}>
             <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{product.name}</strong>
-            <span style={{ color: '#6e1a3a', fontWeight: 'bold' }}>₹{price}</span>
+            <span style={{ color: 'var(--mr-primary)', fontWeight: 'bold' }}>₹{price}</span>
           </div>
         </div>
 
         {canNativeShare && (
-          <button type="button" onClick={() => void nativeShare()} style={{ width: '100%', marginBottom: '0.8rem', padding: '0.7rem', border: 'none', borderRadius: '10px', background: 'linear-gradient(135deg, #6e1a3a, #b03466)', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>
+          <button type="button" onClick={() => void nativeShare()} style={{ width: '100%', marginBottom: '0.8rem', padding: '0.7rem', border: 'none', borderRadius: '10px', background: 'linear-gradient(135deg, var(--mr-primary), var(--mr-blue))', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>
             {tr('Share using your phone apps')}
           </button>
         )}

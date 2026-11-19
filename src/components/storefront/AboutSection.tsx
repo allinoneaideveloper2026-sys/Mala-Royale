@@ -107,7 +107,7 @@ export default function AboutSection({ onSubmitFeedback, signInButton }: AboutSe
           subtitle={tr('Any suggestion or feedback is welcome. It helps us serve you better.')}
         />
         <ScrollReveal>
-          <form onSubmit={submit} style={{ display: 'grid', gap: '0.7rem', maxWidth: '560px', padding: '1.1rem', borderRadius: '16px', background: '#fff', border: '1px solid #f0dce4', boxShadow: '0 8px 22px rgba(63,12,34,0.08)' }}>
+          <form onSubmit={submit} style={{ display: 'grid', gap: '0.7rem', maxWidth: '560px', padding: '1.1rem', borderRadius: '16px', background: '#fff', border: '1px solid var(--mr-line)', boxShadow: '0 8px 22px rgba(11,20,40,0.08)' }}>
             <input
               aria-label={tr('Your name (optional)')}
               placeholder={tr('Your name (optional)')}
@@ -133,7 +133,7 @@ export default function AboutSection({ onSubmitFeedback, signInButton }: AboutSe
             <button
               type="submit"
               disabled={sending || !text.trim()}
-              style={{ padding: '0.7rem', border: 'none', borderRadius: '10px', background: 'linear-gradient(135deg, #6e1a3a, #b03466)', color: '#fff', fontWeight: 'bold', cursor: sending || !text.trim() ? 'not-allowed' : 'pointer', opacity: sending || !text.trim() ? 0.65 : 1 }}
+              style={{ padding: '0.7rem', border: 'none', borderRadius: '10px', background: 'linear-gradient(135deg, var(--mr-primary), var(--mr-blue))', color: '#fff', fontWeight: 'bold', cursor: sending || !text.trim() ? 'not-allowed' : 'pointer', opacity: sending || !text.trim() ? 0.65 : 1 }}
             >
               {sending ? tr('Sending...') : tr('Send feedback')}
             </button>

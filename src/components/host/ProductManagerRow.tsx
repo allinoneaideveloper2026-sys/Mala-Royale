@@ -176,14 +176,14 @@ export default function ProductManagerRow({
               {PALETTE.map(option => {
                 const picked = threadColors.includes(option.name);
                 return (
-                  <button key={option.code} type="button" aria-pressed={picked} onClick={() => setThreadColors(picked ? threadColors.filter(name => name !== option.name) : [...threadColors, option.name])} style={{ display: 'inline-flex', gap: '0.25rem', alignItems: 'center', padding: '0.15rem 0.5rem', borderRadius: '999px', border: picked ? '2px solid #6e1a3a' : '1px solid #ccc', background: picked ? '#f3e9ef' : '#fff', cursor: 'pointer', fontSize: '0.75rem' }}>
+                  <button key={option.code} type="button" aria-pressed={picked} onClick={() => setThreadColors(picked ? threadColors.filter(name => name !== option.name) : [...threadColors, option.name])} style={{ display: 'inline-flex', gap: '0.25rem', alignItems: 'center', padding: '0.15rem 0.5rem', borderRadius: '999px', border: picked ? '2px solid var(--mr-primary)' : '1px solid #ccc', background: picked ? 'var(--mr-tint-strong)' : '#fff', cursor: 'pointer', fontSize: '0.75rem' }}>
                     <span aria-hidden="true" style={{ width: '10px', height: '10px', borderRadius: '50%', background: option.hex, border: '1px solid #999' }} />{option.name}
                   </button>
                 );
               })}
             </div>
           </div>
-          <button type="submit" disabled={busy} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 0, borderRadius: '4px', padding: '0.5rem 0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>{busy ? 'Saving...' : 'Save changes'}</button>
+          <button type="submit" disabled={busy} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 0, borderRadius: '4px', padding: '0.5rem 0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>{busy ? 'Saving...' : 'Save changes'}</button>
         </form>
       )}
       {error && <p role="alert" style={{ color: '#b00020', margin: '0.5rem 0 0' }}>{error}</p>}

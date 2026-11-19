@@ -6,7 +6,13 @@ import { UserRole, Product, ProductStatus, Enquiry, Feedback, Order, CourierBill
 import { globalOrderBook } from './domain/OrderBook';
 import { auth, firebaseConfigured } from './firebase';
 import AIOfferBannerContainer from './components/AIOfferBanner/AIOfferBannerContainer';
-import BrandHeroBanner from './components/AIOfferBanner/BrandHeroBanner';
+import SiteHeader from './components/storefront/SiteHeader';
+import { CategoryTiles, ColorRow, HeroBanner, ProductSkeletons, type CategoryTile, type ColorTile } from './components/storefront/HomeSections';
+import KuchuPicker from './components/storefront/KuchuPicker';
+import ProductQuickView from './components/storefront/ProductQuickView';
+import { HeartIcon } from './components/storefront/Icons';
+import { useWishlist } from './app/wishlist';
+import { withViewTransition } from './app/transitions';
 import { cardBadges, discountPercent, type OfferAction } from './components/AIOfferBanner/offerEngine';
 import { useBrowsingContext } from './components/AIOfferBanner/useBrowsingContext';
 import { adjustWeight } from './analytics/insights';
@@ -103,6 +109,13 @@ export default function App() {
   const [consentWhatsapp, setConsentWhatsapp] = useState(false);
   const [consentPromos, setConsentPromos] = useState(false);
   const [notifyNote, setNotifyNote] = useState('');
+  const [searchText, setSearchText] = useState('');
+  const [colorFilter, setColorFilter] = useState('');
+  const [wishOnly, setWishOnly] = useState(false);
+  const [viewProductId, setViewProductId] = useState<string | null>(null);
+  const [devView, setDevView] = useState<'HOME' | 'HOST'>('HOME');
+  const [productsReady, setProductsReady] = useState(!firebaseConfigured);
+  const wishlist = useWishlist();
   const [kuchuList, setKuchuList] = useState<KuchuDesign[]>([]);
   const [kuchuChoice, setKuchuChoice] = useState<Record<string, string>>({});
   const [threadChoice, setThreadChoice] = useState<Record<string, string>>({});
@@ -253,6 +266,7 @@ export default function App() {
     // Customers use a cached read (saves free-tier Firestore reads); staff get live updates.
     return subscribeProducts(nextProducts => {
       setSyncError('');
+      setProductsReady(true);
       setProducts(nextProducts);
     }, error => setSyncError(error.message), { live: isStaff });
   }, [isStaff]);
@@ -1734,8 +1748,33 @@ export default function App() {
     ...products.map(product => product.category).filter(Boolean),
   ]));
 
+  const categoryTiles: CategoryTile[] = categoryOptions
+    .map(name => {
+      const inCategory = products.filter(product => product.category === name);
+      return { name, count: inCategory.length, image: inCategory.find(product => product.image)?.image };
+    })
+    .filter(tile => tile.count > 0);
+  const colorMap = new Map<string, ColorTile>();
+  products.forEach(product => {
+    if (!product.color) return;
+    const entry: ColorTile = colorMap.get(product.color) || { name: product.color, hex: PALETTE.find(option => option.code === product.colorCode || option.name === product.color)?.hex || '#d9d2c3', count: 0 };
+    entry.count += 1;
+    colorMap.set(product.color, entry);
+  });
+  const colorTiles: ColorTile[] = Array.from(colorMap.values()).sort((left, right) => right.count - left.count);
+  const scrollToCatalog = () => window.setTimeout(() => document.getElementById('mr-catalog')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+
   const filteredProducts = (() => {
     let list = categoryFilter === 'All' ? products : products.filter(product => product.category === categoryFilter);
+    const tokens = searchText.toLowerCase().split(/\s+/).filter(Boolean);
+    if (tokens.length > 0) {
+      list = list.filter(product => {
+        const haystack = `${product.name} ${product.category} ${product.color || ''} ${product.description || ''} ${product.itemCode || ''} ${product.size || ''}`.toLowerCase();
+        return tokens.every(token => haystack.includes(token));
+      });
+    }
+    if (colorFilter) list = list.filter(product => product.color === colorFilter);
+    if (wishOnly) list = list.filter(product => wishlist.has(product.id));
     if (onlyInStock) list = list.filter(isPurchasable);
     if (onlyOffers) list = list.filter(product => discountPercent(product) > 0);
     const sorted = [...list];
@@ -1750,10 +1789,16 @@ export default function App() {
   // Products of the same design in different colours are shown as one listing with colour choices.
   const [variantChoice, setVariantChoice] = useState<Record<string, string>>({});
   const groupedProducts = groupVariants(filteredProducts).map(group => {
-    const chosen = group.variants.find(variant => variant.id === variantChoice[group.key]);
+    const chosen = group.variants.find(variant => variant.id === variantChoice[group.key]) || (colorFilter ? group.variants.find(variant => variant.color === colorFilter) : undefined);
     const shown = chosen || group.variants.find(isPurchasable) || group.variants[0];
     return { key: group.key, variants: group.variants, product: shown };
   });
+
+  const viewProduct = viewProductId ? products.find(product => product.id === viewProductId) : undefined;
+  const viewVariants = viewProduct ? (viewProduct.designKey ? products.filter(product => product.designKey === viewProduct.designKey) : [viewProduct]) : [];
+  const viewRelated = viewProduct
+    ? products.filter(product => product.id !== viewProduct.id && product.category === viewProduct.category && (!viewProduct.designKey || product.designKey !== viewProduct.designKey) && isPurchasable(product)).slice(0, 8)
+    : [];
 
   const newEnquiryCount = enquiries.filter(item => item.status === 'NEW').length;
   const newFeedbackCount = feedbackItems.filter(item => item.status === 'NEW').length;
@@ -1778,7 +1823,7 @@ export default function App() {
 
   return (
     <TrContext.Provider value={tr}>
-    <div style={{ fontFamily: 'Georgia, serif', backgroundColor: '#fdf8f6', color: '#333', minHeight: '100vh' }}>
+    <div style={{ fontFamily: 'Georgia, serif', backgroundColor: 'var(--mr-ivory)', color: '#333', minHeight: '100vh' }}>
       
       <style>{`
         .mr-zoomable { overflow: hidden; }
@@ -1787,7 +1832,7 @@ export default function App() {
       `}</style>
 
       {/* ROLE SWITCHER & LANGUAGE HEADER */}
-      <div style={{ backgroundColor: '#1a050d', color: '#fff', padding: '0.6rem 1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.85rem' }}>
+      <div style={{ backgroundColor: 'var(--mr-ink)', color: '#fff', padding: '0.6rem 1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.85rem' }}>
         <div>
           {isStaff || !firebaseConfigured ? (
             <span>{tr('Role:')} <strong>{firebaseConfigured ? firebaseLoading ? tr('CHECKING ACCESS') : firebaseUser ? role === 'OWNER' ? tr('HOST') : role : tr('GUEST') : `LOCAL ${role === 'OWNER' ? 'HOST' : role}`}</strong> ({firebaseConfigured ? firebaseUser?.email || 'signed out' : userEmail})</span>
@@ -1829,7 +1874,22 @@ export default function App() {
       ) : null}
 
       {/* BOUTIQUE BRANDING */}
-      <BrandHeroBanner logoUrl={LOGO_URL} name={t.appName} tagline={t.tagline} />
+      <div className="mr-announce">{tr('Where Tradition Meets Royalty')}</div>
+      <SiteHeader
+        categories={categoryOptions}
+        activeCategory={categoryFilter}
+        onCategory={category => { setCustomerTab('SHOP'); withViewTransition(() => { setCategoryFilter(category); setWishOnly(false); }); if (category !== 'All') scrollToCatalog(); }}
+        search={searchText}
+        onSearch={value => { setCustomerTab('SHOP'); setSearchText(value); }}
+        wishlistCount={wishlist.ids.length}
+        wishlistActive={wishOnly}
+        onWishlist={() => { setCustomerTab('SHOP'); withViewTransition(() => setWishOnly(current => !current)); scrollToCatalog(); }}
+        cartCount={cartCount}
+        onCart={() => setIsCartOpen(true)}
+        shopping={!isStaff}
+        tr={tr}
+      />
+      {!isStaff && customerTab === 'SHOP' && <HeroBanner tr={tr} onShop={category => { withViewTransition(() => { setCategoryFilter(categoryOptions.includes(category) ? category : 'All'); }); scrollToCatalog(); }} />}
 
       {!isStaff && (
         <AIOfferBannerContainer
@@ -1852,8 +1912,14 @@ export default function App() {
         {/* DEVELOPER VIEW */}
         {/* ------------------------------------------------------------------------- */}
         {!firebaseLoading && role === 'DEVELOPER' && (
+          <div className="mr-tabs" role="tablist" aria-label="Developer views">
+            <button type="button" role="tab" className="mr-tab" aria-selected={devView === 'HOME'} onClick={() => withViewTransition(() => setDevView('HOME'))}>🛠️ Developer Telemetry &amp; Host Access (Home)</button>
+            <button type="button" role="tab" className="mr-tab" aria-selected={devView === 'HOST'} onClick={() => withViewTransition(() => setDevView('HOST'))}>🏪 Host Management Panel</button>
+          </div>
+        )}
+        {!firebaseLoading && role === 'DEVELOPER' && devView === 'HOME' && (
           <div style={{ backgroundColor: '#fff', padding: '1.8rem', borderRadius: '10px', boxShadow: '0 2px 10px rgba(0,0,0,0.08)', marginBottom: '2rem' }}>
-            <h2 style={{ color: '#6e1a3a', marginTop: 0 }}>🛠️ Developer Telemetry & Host Access</h2>
+            <h2 style={{ color: 'var(--mr-primary)', marginTop: 0 }}>🛠️ Developer Telemetry & Host Access</h2>
             <p style={{ fontSize: '0.9rem' }}>App Version: <strong>{CONFIG.version}</strong> | Active Orders in Engine: <strong>{activeOrders.length}</strong></p>
             <p style={{ fontSize: '0.85rem', margin: '0.3rem 0 0.8rem' }}>
               Screenshot reader (AI): <button type="button" onClick={() => void handleAcceptAiLicense()} style={{ cursor: 'pointer' }}>Accept AI model licence (one time)</button>
@@ -1865,7 +1931,7 @@ export default function App() {
                 <input aria-label="Host ID" placeholder="Host ID (e.g. H01)" value={newHostId} onChange={e => setNewHostId(e.target.value)} required maxLength={24} style={{ padding: '0.6rem', border: '1px solid #ccc', borderRadius: '4px' }} />
                 <input aria-label="Host Gmail" type="email" placeholder="Host Gmail" value={newHostEmail} onChange={e => setNewHostEmail(e.target.value)} required style={{ padding: '0.6rem', border: '1px solid #ccc', borderRadius: '4px' }} />
                 <input aria-label="Host nickname" placeholder="Nickname (shown on actions)" value={newHostNickname} onChange={e => setNewHostNickname(e.target.value)} required maxLength={30} style={{ padding: '0.6rem', border: '1px solid #ccc', borderRadius: '4px' }} />
-                <button type="submit" style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.6rem 1.2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Add host</button>
+                <button type="submit" style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.6rem 1.2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Add host</button>
               </form>
               <div style={{ marginTop: '1rem', display: 'grid', gap: '0.5rem' }}>
                 <strong>Hosts</strong>
@@ -1920,9 +1986,9 @@ export default function App() {
         {/* ------------------------------------------------------------------------- */}
         {/* HOST / OWNER VIEW (also shown to the developer account) */}
         {/* ------------------------------------------------------------------------- */}
-        {!firebaseLoading && (role === 'OWNER' || role === 'DEVELOPER') && (
+        {!firebaseLoading && (role === 'OWNER' || (role === 'DEVELOPER' && devView === 'HOST')) && (
           <div style={{ backgroundColor: '#fff', padding: '1.8rem', borderRadius: '10px', boxShadow: '0 2px 10px rgba(0,0,0,0.08)' }}>
-            <h2 style={{ color: '#6e1a3a', marginTop: 0 }}>🏪 Host Management Panel</h2>
+            <h2 style={{ color: 'var(--mr-primary)', marginTop: 0 }}>🏪 Host Management Panel</h2>
 
             <div role="tablist" aria-label="Host sections" style={{ display: 'flex', gap: '0.3rem', overflowX: 'auto', borderBottom: '1px solid #ddd', margin: '0 0 1.2rem' }}>
               {([
@@ -1935,7 +2001,7 @@ export default function App() {
                 ['FEEDBACK', `Feedback${newFeedbackCount ? ` (${newFeedbackCount} new)` : ''}`],
                 ['INSIGHTS', 'AI insights'],
               ] as const).map(([tab, label]) => (
-                <button key={tab} type="button" role="tab" aria-selected={hostTab === tab} onClick={() => setHostTab(tab)} style={{ padding: '0.65rem 0.9rem', border: 0, borderBottom: hostTab === tab ? '3px solid #6e1a3a' : '3px solid transparent', background: 'transparent', color: '#6e1a3a', fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <button key={tab} type="button" role="tab" aria-selected={hostTab === tab} onClick={() => setHostTab(tab)} style={{ padding: '0.65rem 0.9rem', border: 0, borderBottom: hostTab === tab ? '3px solid var(--mr-primary)' : '3px solid transparent', background: 'transparent', color: 'var(--mr-primary)', fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                   {label}
                 </button>
               ))}
@@ -1976,14 +2042,14 @@ export default function App() {
                   {addingCategory && (
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
                       <input aria-label="New category name" placeholder="New category name" maxLength={40} value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} style={{ padding: '0.5rem', flex: 1, minWidth: 0 }} />
-                      <button type="button" onClick={() => void handleAddCategory()} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', borderRadius: '4px', padding: '0.5rem 0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>Add</button>
+                      <button type="button" onClick={() => void handleAddCategory()} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', borderRadius: '4px', padding: '0.5rem 0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>Add</button>
                     </div>
                   )}
                 </div>
                 <input type="number" placeholder="Regular Price (₹) *" value={newProduct.price} onChange={e => setNewProduct({ ...newProduct, price: e.target.value })} required style={{ padding: '0.6rem' }} />
                 <input type="number" min="1" step="0.01" aria-label="Offer price (leave blank for no offer)" placeholder="Offer Price (₹) - blank = no offer" value={newProduct.offerPrice} onChange={e => setNewProduct({ ...newProduct, offerPrice: e.target.value })} style={{ padding: '0.6rem' }} />
                 <input type="number" min="0" step="1" aria-label="Quantity in stock" placeholder="Quantity in stock *" value={newProduct.quantity} onChange={e => setNewProduct({ ...newProduct, quantity: e.target.value })} required style={{ padding: '0.6rem' }} />
-                <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.6rem', padding: '0.8rem', background: '#faf6f8', border: '1px solid #eee', borderRadius: '8px' }}>
+                <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.6rem', padding: '0.8rem', background: 'var(--mr-tint)', border: '1px solid #eee', borderRadius: '8px' }}>
                   <strong>Item ID and colour</strong>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.5rem' }}>
                     <input aria-label="Category code" list="mr-category-codes" placeholder={`Category code (${categoryCodeFor(newProduct.category) || 'SILK'})`} value={newProduct.categoryCode} onChange={e => setNewProduct({ ...newProduct, categoryCode: e.target.value.toUpperCase(), itemCode: '' })} maxLength={6} style={{ padding: '0.55rem' }} />
@@ -1998,7 +2064,7 @@ export default function App() {
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', fontSize: '0.85rem' }}>
                       <span>Colours seen in your photo:</span>
                       {colorSuggestions.map(option => (
-                        <button key={option.code} type="button" onClick={() => setNewProduct({ ...newProduct, color: option.name, itemCode: '' })} style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center', padding: '0.25rem 0.6rem', borderRadius: '999px', border: '1px solid #ccc', background: newProduct.color === option.name ? '#f3e9ef' : '#fff', cursor: 'pointer' }}>
+                        <button key={option.code} type="button" onClick={() => setNewProduct({ ...newProduct, color: option.name, itemCode: '' })} style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center', padding: '0.25rem 0.6rem', borderRadius: '999px', border: '1px solid #ccc', background: newProduct.color === option.name ? 'var(--mr-tint-strong)' : '#fff', cursor: 'pointer' }}>
                           <span aria-hidden="true" style={{ width: '14px', height: '14px', borderRadius: '50%', background: option.hex, border: '1px solid #999' }} />{option.name}
                         </button>
                       ))}
@@ -2010,7 +2076,7 @@ export default function App() {
                   </label>
                   <small style={{ color: '#666' }}>Items with the same category code and pattern code are shown together as colours of one design.</small>
                 </div>
-                <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.6rem', padding: '0.8rem', background: '#faf6f8', border: '1px solid #eee', borderRadius: '8px' }}>
+                <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.6rem', padding: '0.8rem', background: 'var(--mr-tint)', border: '1px solid #eee', borderRadius: '8px' }}>
                   <strong>Kuchu and thread colours (optional)</strong>
                   {kuchuList.length === 0
                     ? <small style={{ color: '#666' }}>Add Kuchu designs in the Upload Kuchu Section above to tag them on this saree.</small>
@@ -2031,7 +2097,7 @@ export default function App() {
                       const picked = newProduct.threadColors.includes(option.name);
                       const suggested = colorSuggestions.some(item => item.code === option.code) || option.name === newProduct.color;
                       return (
-                        <button key={option.code} type="button" aria-pressed={picked} onClick={() => setNewProduct({ ...newProduct, threadColors: picked ? newProduct.threadColors.filter(name => name !== option.name) : [...newProduct.threadColors, option.name] })} style={{ display: 'inline-flex', gap: '0.3rem', alignItems: 'center', padding: '0.2rem 0.55rem', borderRadius: '999px', border: picked ? '2px solid #6e1a3a' : suggested ? '1px dashed #6e1a3a' : '1px solid #ccc', background: picked ? '#f3e9ef' : '#fff', cursor: 'pointer', fontSize: '0.78rem' }}>
+                        <button key={option.code} type="button" aria-pressed={picked} onClick={() => setNewProduct({ ...newProduct, threadColors: picked ? newProduct.threadColors.filter(name => name !== option.name) : [...newProduct.threadColors, option.name] })} style={{ display: 'inline-flex', gap: '0.3rem', alignItems: 'center', padding: '0.2rem 0.55rem', borderRadius: '999px', border: picked ? '2px solid var(--mr-primary)' : suggested ? '1px dashed var(--mr-primary)' : '1px solid #ccc', background: picked ? 'var(--mr-tint-strong)' : '#fff', cursor: 'pointer', fontSize: '0.78rem' }}>
                           <span aria-hidden="true" style={{ width: '12px', height: '12px', borderRadius: '50%', background: option.hex, border: '1px solid #999' }} />{option.name}
                         </button>
                       );
@@ -2071,7 +2137,7 @@ export default function App() {
                   </div>
                 )}
                 <textarea placeholder="Product Description" value={newProduct.description} onChange={e => setNewProduct({ ...newProduct, description: e.target.value })} style={{ padding: '0.6rem', gridColumn: '1 / -1' }} />
-                <button type="submit" disabled={isUploadingProduct} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', gridColumn: '1 / -1' }}>
+                <button type="submit" disabled={isUploadingProduct} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', gridColumn: '1 / -1' }}>
                   {isUploadingProduct ? 'Uploading media...' : t.publishProduct}
                 </button>
               </form>
@@ -2089,7 +2155,7 @@ export default function App() {
               {paymentQrUrl && <img src={paymentQrUrl} alt="Current checkout payment QR" style={{ width: '160px', height: '160px', objectFit: 'contain', display: 'block', marginBottom: '0.8rem' }} />}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.7rem', alignItems: 'center' }}>
                 <input type="file" accept="image/*" onChange={handlePaymentQrSelection} />
-                <button type="button" disabled={!paymentQrFile || isUploadingQr} onClick={() => void handleCheckoutQrUpload()} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
+                <button type="button" disabled={!paymentQrFile || isUploadingQr} onClick={() => void handleCheckoutQrUpload()} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
                   {isUploadingQr ? 'Uploading...' : 'Save checkout QR'}
                 </button>
               </div>
@@ -2103,7 +2169,7 @@ export default function App() {
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
                 <input aria-label="UPI ID" placeholder="UPI ID, for example name@bank" value={upiDraft} onChange={event => setUpiDraft(event.target.value)} style={{ padding: '0.5rem', flex: '1 1 220px' }} />
                 <input aria-label="Name on UPI account" placeholder="Name on UPI account" value={payeeDraft} onChange={event => setPayeeDraft(event.target.value)} style={{ padding: '0.5rem', flex: '1 1 180px' }} />
-                <button type="button" onClick={() => void handleSaveUpi()} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save UPI details</button>
+                <button type="button" onClick={() => void handleSaveUpi()} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save UPI details</button>
               </div>
               <p style={{ margin: '0.6rem 0 0', fontSize: '0.8rem', color: upiId ? '#1b5e20' : '#8a4b08' }}>{upiId ? `Dynamic QR is on for ${upiId}.` : 'Not set: customers see the uploaded QR.'}</p>
             </div>
@@ -2123,7 +2189,7 @@ export default function App() {
                 <span><strong>Rule A:</strong> no courier charge for a single saree (quantity 1), unless the same customer already ordered to the same pincode in the last 24 hours.</span>
               </label>
               <p style={{ margin: '0.4rem 0', fontSize: '0.85rem', color: '#666' }}><strong>Rule C</strong> applies to everything else: you add the courier details and charge, the customer pays it, and you verify it before dispatch.</p>
-              <button type="button" onClick={() => void handleSaveShipping()} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save courier rules</button>
+              <button type="button" onClick={() => void handleSaveShipping()} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save courier rules</button>
             </div>
 
             </>)}
@@ -2136,7 +2202,7 @@ export default function App() {
               </p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center', margin: '0 0 1rem' }}>
                 <input type="tel" inputMode="numeric" aria-label="Optional direct WhatsApp number" placeholder="Optional direct WhatsApp number" value={whatsAppDraft} onChange={event => setWhatsAppDraft(event.target.value)} style={{ padding: '0.5rem', flex: '1 1 220px' }} />
-                <button type="button" onClick={() => void handleSaveWhatsApp(whatsAppDraft)} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save number</button>
+                <button type="button" onClick={() => void handleSaveWhatsApp(whatsAppDraft)} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save number</button>
                 {hostWhatsApp && <button type="button" onClick={() => void handleSaveWhatsApp('')} style={{ padding: '0.5rem 1rem', cursor: 'pointer' }}>Remove number</button>}
                 <small style={{ color: '#777', flexBasis: '100%' }}>{hostWhatsApp ? 'Customers now see a "message us directly" link in the chat, which shows this number to those who use it.' : 'No number saved. Customers can only send enquiries through the form.'}</small>
               </div>
@@ -2178,7 +2244,7 @@ export default function App() {
                   const inUse = products.some(product => product.category === option);
                   const removable = customCategories.includes(option) && !inUse;
                   return (
-                    <span key={option} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', backgroundColor: '#f1e6ea', color: '#6e1a3a', borderRadius: '999px', padding: '0.15rem 0.7rem', fontSize: '0.8rem' }}>
+                    <span key={option} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', backgroundColor: 'var(--mr-tint-strong)', color: 'var(--mr-primary)', borderRadius: '999px', padding: '0.15rem 0.7rem', fontSize: '0.8rem' }}>
                       {option}
                       {removable && <button type="button" aria-label={`Remove category ${option}`} onClick={() => void handleRemoveCategory(option)} style={{ background: 'none', border: 'none', color: '#8b1e2d', cursor: 'pointer', padding: 0 }}>✕</button>}
                     </span>
@@ -2214,7 +2280,7 @@ export default function App() {
                 ['DISPATCHED', `Dispatched (${hostDispatchedOrders.length})`],
                 ['HISTORY', `History (${hostHistoryOrders.length})`],
               ] as const).map(([tab, label]) => (
-                <button key={tab} type="button" role="tab" aria-selected={hostOrderTab === tab} onClick={() => setHostOrderTab(tab)} style={{ padding: '0.65rem 0.8rem', border: 0, borderBottom: hostOrderTab === tab ? '3px solid #6e1a3a' : '3px solid transparent', background: 'transparent', color: '#6e1a3a', fontWeight: 'bold', cursor: 'pointer' }}>
+                <button key={tab} type="button" role="tab" aria-selected={hostOrderTab === tab} onClick={() => setHostOrderTab(tab)} style={{ padding: '0.65rem 0.8rem', border: 0, borderBottom: hostOrderTab === tab ? '3px solid var(--mr-primary)' : '3px solid transparent', background: 'transparent', color: 'var(--mr-primary)', fontWeight: 'bold', cursor: 'pointer' }}>
                   {label}
                 </button>
               ))}
@@ -2239,7 +2305,7 @@ export default function App() {
                     <span style={{ minWidth: 0 }}><span className="mr-order-label">Customer</span><div className="mr-order-value">{ord.address.fullName}</div></span>
                     <span className="mr-col-id" style={{ minWidth: 0 }}><span className="mr-order-label">Order ID</span><div className="mr-order-value" style={{ fontFamily: 'monospace' }}>{ord.orderId}</div></span>
                     <span className="mr-col-date" style={{ minWidth: 0 }}><span className="mr-order-label">Date</span><div className="mr-order-value">{new Date(ord.createdAt).toLocaleDateString()}</div></span>
-                    <span><span className="mr-order-label">Amount</span><div className="mr-order-value" style={{ color: '#6e1a3a' }}>₹{ord.itemTotal}</div></span>
+                    <span><span className="mr-order-label">Amount</span><div className="mr-order-value" style={{ color: 'var(--mr-primary)' }}>₹{ord.itemTotal}</div></span>
                     <span className="mr-chevron" aria-hidden="true">›</span>
                   </button>
                   {open && (
@@ -2260,7 +2326,7 @@ export default function App() {
                     Customer: {ord.address.fullName} ({ord.address.phone}){' '}
                     <a href={whatsAppLink(ord.address.phone, `Hello ${ord.address.fullName}, thank you for your order ${ord.orderId} at Mala Royale. We have received it and will update you shortly.`)} target="_blank" rel="noreferrer" style={{ marginLeft: '0.4rem', color: '#128c7e', fontWeight: 'bold' }}>WhatsApp customer</a>
                   </p>
-                  <div style={{ margin: '0.6rem 0', padding: '0.75rem', background: '#f7f2ef', borderRadius: '5px' }}>
+                  <div style={{ margin: '0.6rem 0', padding: '0.75rem', background: 'var(--mr-tint)', borderRadius: '5px' }}>
                     <strong>Delivery address</strong>
                     <p style={{ margin: '0.35rem 0' }}>
                       {[ord.address.houseNameOrNumber, ord.address.street1, ord.address.street2, ord.address.landmark1, ord.address.landmark2, ord.address.city, ord.address.taluk, ord.address.district, ord.address.state, ord.address.pincode, ord.address.country].filter(Boolean).join(', ') || ord.address.street}
@@ -2324,7 +2390,7 @@ export default function App() {
                     <button type="button" onClick={() => setForceCourier(current => ({ ...current, [ord.orderId]: true }))} style={{ margin: '0.4rem 0', cursor: 'pointer' }}>Add a courier charge anyway</button>
                   )}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.8rem' }}>
-                    {hostOrderTab === 'ACTIVE' && <button type="button" disabled={!canDispatch} onClick={() => void handleDispatch(ord.orderId)} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.45rem 0.8rem', borderRadius: '4px', cursor: canDispatch ? 'pointer' : 'not-allowed' }}>{t.markDispatched}</button>}
+                    {hostOrderTab === 'ACTIVE' && <button type="button" disabled={!canDispatch} onClick={() => void handleDispatch(ord.orderId)} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.45rem 0.8rem', borderRadius: '4px', cursor: canDispatch ? 'pointer' : 'not-allowed' }}>{t.markDispatched}</button>}
                     {hostOrderTab === 'DISPATCHED' && <button type="button" onClick={() => void handleDelivered(ord.orderId)} style={{ backgroundColor: '#2e7d32', color: '#fff', border: 'none', padding: '0.45rem 0.8rem', borderRadius: '4px', cursor: 'pointer' }}>Mark delivered</button>}
                     {hostOrderTab === 'HISTORY' && <button type="button" onClick={() => void handleDeleteOrderRow(ord)} style={{ backgroundColor: '#fff', color: '#c62828', border: '1px solid #c62828', padding: '0.45rem 0.8rem', borderRadius: '4px', cursor: 'pointer' }}>Delete row</button>}
                   </div>
@@ -2361,7 +2427,7 @@ export default function App() {
                 role="tab"
                 aria-selected={customerTab === 'SHOP'}
                 onClick={() => setCustomerTab('SHOP')}
-                style={{ padding: '0.7rem 1rem', border: 0, borderBottom: customerTab === 'SHOP' ? '3px solid #6e1a3a' : '3px solid transparent', background: 'transparent', color: '#6e1a3a', fontWeight: 'bold', cursor: 'pointer' }}
+                style={{ padding: '0.7rem 1rem', border: 0, borderBottom: customerTab === 'SHOP' ? '3px solid var(--mr-primary)' : '3px solid transparent', background: 'transparent', color: 'var(--mr-primary)', fontWeight: 'bold', cursor: 'pointer' }}
               >
                 {tr('Shop')}
               </button>
@@ -2370,7 +2436,7 @@ export default function App() {
                 role="tab"
                 aria-selected={customerTab === 'ORDERS'}
                 onClick={() => setCustomerTab('ORDERS')}
-                style={{ padding: '0.7rem 1rem', border: 0, borderBottom: customerTab === 'ORDERS' ? '3px solid #6e1a3a' : '3px solid transparent', background: 'transparent', color: '#6e1a3a', fontWeight: 'bold', cursor: 'pointer' }}
+                style={{ padding: '0.7rem 1rem', border: 0, borderBottom: customerTab === 'ORDERS' ? '3px solid var(--mr-primary)' : '3px solid transparent', background: 'transparent', color: 'var(--mr-primary)', fontWeight: 'bold', cursor: 'pointer' }}
               >
                 {tr('Recent orders')}{activeOrders.length > 0 ? ` (${activeOrders.length})` : ''}
               </button>
@@ -2379,7 +2445,7 @@ export default function App() {
                 role="tab"
                 aria-selected={customerTab === 'ADDRESSES'}
                 onClick={() => setCustomerTab('ADDRESSES')}
-                style={{ padding: '0.7rem 1rem', border: 0, borderBottom: customerTab === 'ADDRESSES' ? '3px solid #6e1a3a' : '3px solid transparent', background: 'transparent', color: '#6e1a3a', fontWeight: 'bold', cursor: 'pointer' }}
+                style={{ padding: '0.7rem 1rem', border: 0, borderBottom: customerTab === 'ADDRESSES' ? '3px solid var(--mr-primary)' : '3px solid transparent', background: 'transparent', color: 'var(--mr-primary)', fontWeight: 'bold', cursor: 'pointer' }}
               >
                 {tr('Addresses')}{savedAddresses.length > 0 ? ` (${savedAddresses.length})` : ''}
               </button>
@@ -2388,7 +2454,7 @@ export default function App() {
                 role="tab"
                 aria-selected={customerTab === 'ABOUT'}
                 onClick={() => setCustomerTab('ABOUT')}
-                style={{ padding: '0.7rem 1rem', border: 0, borderBottom: customerTab === 'ABOUT' ? '3px solid #6e1a3a' : '3px solid transparent', background: 'transparent', color: '#6e1a3a', fontWeight: 'bold', cursor: 'pointer' }}
+                style={{ padding: '0.7rem 1rem', border: 0, borderBottom: customerTab === 'ABOUT' ? '3px solid var(--mr-primary)' : '3px solid transparent', background: 'transparent', color: 'var(--mr-primary)', fontWeight: 'bold', cursor: 'pointer' }}
               >
                 {tr('About')}
               </button>
@@ -2397,7 +2463,7 @@ export default function App() {
             <div key={customerTab} className="mr-tab-in">
             {customerTab === 'ADDRESSES' && (
               <section aria-label={tr('Saved delivery addresses')}>
-                <h2 style={{ color: '#6e1a3a', marginTop: 0 }}>{tr('Delivery addresses')}</h2>
+                <h2 style={{ color: 'var(--mr-primary)', marginTop: 0 }}>{tr('Delivery addresses')}</h2>
                 {firebaseConfigured && !googleUser && (
                   <div style={{ marginBottom: '1rem' }}>
                     <p role="status" style={{ marginTop: 0 }}>{tr('Sign in with Google to save addresses to your account.')}</p>
@@ -2422,7 +2488,7 @@ export default function App() {
                 <form onSubmit={handleSaveDeliveryAddress} style={{ backgroundColor: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '1rem', display: 'grid', gap: '0.8rem' }}>
                   <h3 style={{ margin: 0 }}>{editingAddressId ? tr('Edit address') : tr('Add a delivery address')}</h3>
                   <DeliveryAddressFields address={address} setAddress={setAddress} isCheckingPincode={isCheckingPincode} onCheckPincode={() => void handleCheckPincode()} />
-                  <button type="submit" style={{ justifySelf: 'start', backgroundColor: '#6e1a3a', color: '#fff', border: 0, borderRadius: '4px', padding: '0.6rem 0.9rem', cursor: 'pointer' }}>
+                  <button type="submit" style={{ justifySelf: 'start', backgroundColor: 'var(--mr-primary)', color: '#fff', border: 0, borderRadius: '4px', padding: '0.6rem 0.9rem', cursor: 'pointer' }}>
                     {editingAddressId ? tr('Save address changes') : tr('Save address')}
                   </button>
                   {editingAddressId && <button type="button" onClick={() => { setEditingAddressId(null); setAddress({ fullName: '', phone: '', houseNameOrNumber: '', street1: '', street2: '', street: '', landmark1: '', landmark2: '', taluk: '', district: '', state: '', country: 'India', pincode: '', consentTimestamp: '' }); }} style={{ justifySelf: 'start' }}>{tr('Cancel editing')}</button>}
@@ -2432,44 +2498,20 @@ export default function App() {
 
             {customerTab === 'SHOP' && (
               <>
+            <CategoryTiles tiles={categoryTiles} active={categoryFilter} onSelect={name => { withViewTransition(() => setCategoryFilter(categoryFilter === name ? 'All' : name)); scrollToCatalog(); }} tr={tr} />
+            <ColorRow colors={colorTiles} active={colorFilter} onSelect={name => { withViewTransition(() => setColorFilter(name)); if (name) scrollToCatalog(); }} tr={tr} />
             <StoryShowcase products={products} onSelect={product => focusProduct(product.id)} />
 
-            {/* Filter Bar & Cart Button */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
-              <div>
-                {['All', ...categoryOptions].map(cat => (
-                  <button
-                    key={cat}
-                    onClick={() => setCategoryFilter(cat)}
-                    style={{
-                      backgroundColor: categoryFilter === cat ? '#6e1a3a' : '#fff',
-                      color: categoryFilter === cat ? '#fff' : '#6e1a3a',
-                      border: '1px solid #6e1a3a',
-                      padding: '0.5rem 1rem',
-                      marginRight: '0.5rem',
-                      borderRadius: '20px',
-                      cursor: 'pointer',
-                      fontWeight: 'bold'
-                    }}
-                  >
-                    {tr(cat)}
-                  </button>
-                ))}
-              </div>
-
-              <button
-                onClick={() => setIsCartOpen(true)}
-                style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.6rem 1.4rem', borderRadius: '25px', fontWeight: 'bold', cursor: 'pointer' }}
-              >
-                {tr(cartCount === 1 ? 'View cart · {count} item · ₹{total}' : 'View cart · {count} items · ₹{total}', { count: cartCount, total: cartTotal })}
-              </button>
-            </div>
-
-            {/* Sort and filter */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.8rem 1.2rem', alignItems: 'center', marginBottom: '1.2rem', fontSize: '0.9rem' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            {/* Sticky filter bar */}
+            <div className="mr-filterbar" role="region" aria-label={tr('Filters')}>
+              <button type="button" className="mr-chip" aria-pressed={onlyInStock} onClick={() => withViewTransition(() => setOnlyInStock(current => !current))}>{tr('In stock only')}</button>
+              <button type="button" className="mr-chip" aria-pressed={onlyOffers} onClick={() => withViewTransition(() => setOnlyOffers(current => !current))}>{tr('On offer')}</button>
+              <button type="button" className="mr-chip" aria-pressed={wishOnly} onClick={() => withViewTransition(() => setWishOnly(current => !current))}>♥ {tr('Saved')} ({wishlist.ids.length})</button>
+              {colorFilter && <button type="button" className="mr-chip" aria-pressed="true" onClick={() => withViewTransition(() => setColorFilter(''))}>{tr('Colour')}: {colorFilter} ×</button>}
+              {searchText && <button type="button" className="mr-chip" aria-pressed="true" onClick={() => setSearchText('')}>“{searchText}” ×</button>}
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', marginLeft: 'auto' }}>
                 {tr('Sort by')}
-                <select value={sortBy} onChange={event => setSortBy(event.target.value as SortKey)} style={{ padding: '0.4rem' }}>
+                <select value={sortBy} onChange={event => withViewTransition(() => setSortBy(event.target.value as SortKey))} style={{ padding: '0.4rem', borderRadius: '8px', border: '1px solid var(--mr-line)' }}>
                   <option value="featured">{tr('Featured')}</option>
                   <option value="newest">{tr('Newest first')}</option>
                   <option value="price-asc">{tr('Price: low to high')}</option>
@@ -2478,29 +2520,34 @@ export default function App() {
                   <option value="in-stock">{tr('In stock first')}</option>
                 </select>
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-                <input type="checkbox" checked={onlyInStock} onChange={event => setOnlyInStock(event.target.checked)} />
-                {tr('In stock only')}
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-                <input type="checkbox" checked={onlyOffers} onChange={event => setOnlyOffers(event.target.checked)} />
-                {tr('On offer')}
-              </label>
-              <span style={{ color: '#777' }}>{tr(filteredProducts.length === 1 ? '{count} item' : '{count} items', { count: filteredProducts.length })}</span>
-              {(categoryFilter !== 'All' || onlyInStock || onlyOffers || sortBy !== 'featured') && (
-                <button type="button" onClick={() => { setCategoryFilter('All'); setOnlyInStock(false); setOnlyOffers(false); setSortBy('featured'); }} style={{ background: 'none', border: 'none', color: '#6e1a3a', textDecoration: 'underline', cursor: 'pointer' }}>{tr('Clear filters')}</button>
+              <span style={{ color: '#777', fontSize: '0.85rem' }}>{tr(filteredProducts.length === 1 ? '{count} item' : '{count} items', { count: filteredProducts.length })}</span>
+              {(categoryFilter !== 'All' || onlyInStock || onlyOffers || wishOnly || colorFilter || searchText || sortBy !== 'featured') && (
+                <button type="button" className="mr-chip" onClick={() => withViewTransition(() => { setCategoryFilter('All'); setOnlyInStock(false); setOnlyOffers(false); setWishOnly(false); setColorFilter(''); setSearchText(''); setSortBy('featured'); })}>{tr('Clear all')}</button>
               )}
+              {cartCount > 0 && <button type="button" className="mr-btn" onClick={() => setIsCartOpen(true)} style={{ padding: '0.45rem 1.1rem', fontSize: '0.85rem' }}>{tr(cartCount === 1 ? 'View cart · {count} item · ₹{total}' : 'View cart · {count} items · ₹{total}', { count: cartCount, total: cartTotal })}</button>}
             </div>
             {filteredProducts.length === 0 && <p role="status" style={{ color: '#666' }}>{tr('No items match these filters.')}</p>}
 
+            {!productsReady && products.length === 0 && <ProductSkeletons />}
             {/* Catalog Grid */}
             <div id="mr-catalog" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.8rem', scrollMarginTop: '100px' }}>
               {groupedProducts.map(({ key: groupKey, variants, product }) => (
-                <div key={groupKey} id={`product-${product.id}`} style={{ backgroundColor: '#fff', borderRadius: '10px', overflow: 'hidden', boxShadow: highlightedProductId === product.id ? '0 0 0 3px #d9a441, 0 12px 30px rgba(110,26,58,0.35)' : '0 4px 12px rgba(0,0,0,0.08)', transition: 'box-shadow 0.4s ease', display: 'flex', flexDirection: 'column' }}>
-                  <ProductGallery key={product.id} product={product} badges={cardBadges(product)} onView={() => trackProductView(product.id, product.category)} />
+                <div key={groupKey} className="mr-card" id={`product-${product.id}`} style={{ backgroundColor: '#fff', borderRadius: '14px', overflow: 'hidden', boxShadow: highlightedProductId === product.id ? '0 0 0 3px var(--mr-gold), 0 12px 30px rgba(16,29,56,0.35)' : '0 4px 12px rgba(0,0,0,0.08)', transition: 'box-shadow 0.4s ease', display: 'flex', flexDirection: 'column' }}>
+                  <ProductGallery
+                    key={product.id}
+                    product={product}
+                    badges={cardBadges(product)}
+                    onView={() => trackProductView(product.id, product.category)}
+                    overlay={(
+                      <>
+                        <button type="button" className="mr-heart" aria-pressed={wishlist.has(product.id)} aria-label={tr('Save for later')} onClick={event => { event.stopPropagation(); wishlist.toggle(product.id); }}><HeartIcon filled={wishlist.has(product.id)} /></button>
+                        <button type="button" className="mr-quick" onClick={event => { event.stopPropagation(); setViewProductId(product.id); trackProductView(product.id, product.category); }}>{tr('Quick view')}</button>
+                      </>
+                    )}
+                  />
                   <div style={{ padding: '1rem', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                     <div>
-                      <span style={{ fontSize: '0.75rem', color: '#6e1a3a', fontWeight: 'bold', textTransform: 'uppercase' }}>{tr(product.category)}</span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--mr-primary)', fontWeight: 'bold', textTransform: 'uppercase' }}>{tr(product.category)}</span>
                       <h3 style={{ margin: '0.3rem 0', fontSize: '1.1rem' }}>{product.name}</h3>
                       {variants.length > 1 && (
                         <div role="group" aria-label={tr('Colours')} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', margin: '0.3rem 0' }}>
@@ -2508,7 +2555,7 @@ export default function App() {
                             const swatch = PALETTE.find(option => option.code === variant.colorCode || option.name === variant.color);
                             const selected = variant.id === product.id;
                             return (
-                              <button key={variant.id} type="button" aria-pressed={selected} title={`${variant.color || variant.name}${isPurchasable(variant) ? '' : ' (not available)'}`} onClick={() => setVariantChoice(current => ({ ...current, [groupKey]: variant.id }))} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.2rem 0.55rem', borderRadius: '999px', border: selected ? '2px solid #6e1a3a' : '1px solid #ccc', background: '#fff', cursor: 'pointer', fontSize: '0.78rem', opacity: isPurchasable(variant) ? 1 : 0.55 }}>
+                              <button key={variant.id} type="button" aria-pressed={selected} title={`${variant.color || variant.name}${isPurchasable(variant) ? '' : ' (not available)'}`} onClick={() => setVariantChoice(current => ({ ...current, [groupKey]: variant.id }))} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.2rem 0.55rem', borderRadius: '999px', border: selected ? '2px solid var(--mr-primary)' : '1px solid #ccc', background: '#fff', cursor: 'pointer', fontSize: '0.78rem', opacity: isPurchasable(variant) ? 1 : 0.55 }}>
                                 <span aria-hidden="true" style={{ width: '14px', height: '14px', borderRadius: '50%', background: swatch?.hex || '#ddd', border: '1px solid #999' }} />{variant.color || variant.name}
                               </button>
                             );
@@ -2516,46 +2563,10 @@ export default function App() {
                         </div>
                       )}
                       {(product.color || product.itemCode) && variants.length === 1 && (
-                        <p style={{ margin: '0 0 0.2rem', fontSize: '0.78rem', color: '#6e1a3a' }}>{product.color ? `${tr('Colour')}: ${product.color}` : ''}{product.size ? ` · ${product.size}` : ''}</p>
+                        <p style={{ margin: '0 0 0.2rem', fontSize: '0.78rem', color: 'var(--mr-primary)' }}>{product.color ? `${tr('Colour')}: ${product.color}` : ''}{product.size ? ` · ${product.size}` : ''}</p>
                       )}
                       <p style={{ fontSize: '0.85rem', color: '#666', lineHeight: '1.3' }}>{product.description}</p>
-                      {compatibleKuchu(product, kuchuList).length > 0 && (
-                        <fieldset style={{ margin: '0.5rem 0', padding: '0.5rem 0.6rem', border: '1px solid #e5d3dc', borderRadius: '8px', display: 'grid', gap: '0.35rem' }}>
-                          <legend style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#6e1a3a', padding: '0 0.3rem' }}>{tr('Add a Kuchu (choose one)')}</legend>
-                          <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem', cursor: 'pointer' }}>
-                            <input type="radio" name={`kuchu-${product.id}`} checked={!selectedKuchuFor(product)} onChange={() => setKuchuChoice(current => ({ ...current, [product.id]: '' }))} />
-                            {tr('No Kuchu')}
-                          </label>
-                          {compatibleKuchu(product, kuchuList).map(kuchu => (
-                            <label key={kuchu.id} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem', cursor: 'pointer', flexWrap: 'wrap' }}>
-                              <input type="radio" name={`kuchu-${product.id}`} checked={kuchuChoice[product.id] === kuchu.id} onChange={() => setKuchuChoice(current => ({ ...current, [product.id]: kuchu.id }))} />
-                              <span>{kuchu.name} <strong style={{ color: '#6e1a3a' }}>+₹{kuchu.price}</strong></span>
-                              <span style={{ display: 'inline-flex', gap: '0.25rem' }}>
-                                {kuchu.photos.slice(0, 4).map(photo => (
-                                  <a key={photo.url} href={photo.url} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}><img src={photo.url} alt={`${kuchu.name} preview`} loading="lazy" style={{ width: '34px', height: '34px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #ddd' }} /></a>
-                                ))}
-                              </span>
-                            </label>
-                          ))}
-                          {selectedKuchuFor(product) && (product.threadColors || []).length > 0 && (
-                            <div role="radiogroup" aria-label={tr('Thread colour')} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center', fontSize: '0.8rem' }}>
-                              <span>{tr('Thread colour (matches the saree):')}</span>
-                              {(product.threadColors || []).map(colorName => {
-                                const swatch = PALETTE.find(option => option.name === colorName);
-                                const picked = threadChoice[product.id] === colorName;
-                                return (
-                                  <button key={colorName} type="button" role="radio" aria-checked={picked} onClick={() => setThreadChoice(current => ({ ...current, [product.id]: colorName }))} style={{ display: 'inline-flex', gap: '0.25rem', alignItems: 'center', padding: '0.15rem 0.5rem', borderRadius: '999px', border: picked ? '2px solid #6e1a3a' : '1px solid #ccc', background: '#fff', cursor: 'pointer' }}>
-                                    <span aria-hidden="true" style={{ width: '12px', height: '12px', borderRadius: '50%', background: swatch?.hex || '#ddd', border: '1px solid #999' }} />{colorName}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                          <div role="note" style={{ marginTop: '0.2rem', padding: '0.4rem 0.5rem', background: '#fdecea', border: '1px solid #f5b5bd', borderRadius: '6px', fontSize: '0.78rem', color: '#8b1e2d' }}>
-                            <strong>{tr(FINAL_SALE_HEADLINE)}</strong>
-                          </div>
-                        </fieldset>
-                      )}
+                      <KuchuPicker product={product} kuchuList={kuchuList} selectedId={kuchuChoice[product.id] || ''} threadColor={threadChoice[product.id] || ''} onKuchu={id => setKuchuChoice(current => ({ ...current, [product.id]: id }))} onThread={color => setThreadChoice(current => ({ ...current, [product.id]: color }))} tr={tr} />
                       {typeof product.quantity === 'number' && product.quantity > 0 && product.quantity <= 3 && effectiveStatus(product) === 'AVAILABLE' && (
                         <p style={{ margin: '0.2rem 0', color: '#b45309', fontSize: '0.8rem', fontWeight: 'bold' }}>{tr('Only {count} left', { count: product.quantity })}</p>
                       )}
@@ -2568,24 +2579,24 @@ export default function App() {
                       <div>
                         {product.offerPrice ? (
                           <>
-                            <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#6e1a3a' }}>₹{lineUnitPrice(product, selectedKuchuFor(product))}</span>
+                            <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--mr-primary)' }}>₹{lineUnitPrice(product, selectedKuchuFor(product))}</span>
                             <span style={{ fontSize: '0.85rem', color: '#999', textDecoration: 'line-through', marginLeft: '0.4rem' }}>₹{lineRegularPrice(product, selectedKuchuFor(product))}</span>
                           </>
                         ) : (
-                          <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#6e1a3a' }}>₹{lineUnitPrice(product, selectedKuchuFor(product))}</span>
+                          <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--mr-primary)' }}>₹{lineUnitPrice(product, selectedKuchuFor(product))}</span>
                         )}
                       </div>
                       {isPurchasable(product) ? (
                         <div style={{ display: 'flex', gap: '0.4rem' }}>
                           <button
                             onClick={() => { const selection = selectionFor(product); if (selection === 'MISSING_THREAD') { alert(tr('Please choose a thread colour for your Kuchu.')); return; } addToCart(product, selection); trackAddToCart(product.id, product.category); }}
-                            style={{ backgroundColor: '#fff', color: '#6e1a3a', border: '1px solid #6e1a3a', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
+                            style={{ backgroundColor: '#fff', color: 'var(--mr-primary)', border: '1px solid var(--mr-primary)', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                           >
                             {tr('+ Add')}
                           </button>
                           <button
                             onClick={() => { const selection = selectionFor(product); if (selection === 'MISSING_THREAD') { alert(tr('Please choose a thread colour for your Kuchu.')); return; } buyNow(product, selection); }}
-                            style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
+                            style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                           >
                             {tr('Buy now')}
                           </button>
@@ -2608,12 +2619,12 @@ export default function App() {
               <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, padding: '1rem' }}>
                 <div role="dialog" aria-label={tr('Shopping cart')} style={{ backgroundColor: '#fff', maxWidth: '550px', width: '100%', maxHeight: '90vh', overflowY: 'auto', borderRadius: '12px', padding: '1.8rem', position: 'relative' }}>
                   <button type="button" aria-label={tr('Close cart')} onClick={() => setIsCartOpen(false)} style={{ position: 'absolute', top: '15px', right: '15px', border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>✕</button>
-                  <h2 style={{ color: '#6e1a3a', marginTop: 0 }}>{tr('Your cart')}</h2>
+                  <h2 style={{ color: 'var(--mr-primary)', marginTop: 0 }}>{tr('Your cart')}</h2>
 
                   {cart.length === 0 ? (
                     <div>
                       <p>{tr('Your cart is empty.')}</p>
-                      <button type="button" onClick={() => setIsCartOpen(false)} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.7rem 1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>{tr('Continue shopping')}</button>
+                      <button type="button" onClick={() => setIsCartOpen(false)} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem 1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>{tr('Continue shopping')}</button>
                     </div>
                   ) : (
                     <>
@@ -2622,7 +2633,7 @@ export default function App() {
                           <div key={lineKey(line)} style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', borderBottom: '1px solid #eee', paddingBottom: '0.9rem' }}>
                             <img src={line.product.image} alt="" style={{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: '6px', flex: '0 0 64px' }} />
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <strong>{line.product.name}</strong>{line.product.color && <span style={{ marginLeft: '0.4rem', fontSize: '0.78rem', color: '#6e1a3a' }}>({line.product.color})</span>}{line.kuchu && <div style={{ fontSize: '0.78rem', color: '#555' }}>Kuchu: {line.kuchu.name} (+₹{line.kuchu.price}){line.threadColor ? ` · Thread: ${line.threadColor}` : ''}</div>}
+                              <strong>{line.product.name}</strong>{line.product.color && <span style={{ marginLeft: '0.4rem', fontSize: '0.78rem', color: 'var(--mr-primary)' }}>({line.product.color})</span>}{line.kuchu && <div style={{ fontSize: '0.78rem', color: '#555' }}>Kuchu: {line.kuchu.name} (+₹{line.kuchu.price}){line.threadColor ? ` · Thread: ${line.threadColor}` : ''}</div>}
                               <div style={{ fontSize: '0.85rem', color: '#666' }}>{tr('₹{price} each', { price: lineUnitPrice(line.product, line.kuchu) })}{typeof line.product.quantity === 'number' && line.product.quantity <= 5 ? ` · ${tr('only {count} left', { count: line.product.quantity })}` : ''}</div>
                               <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.4rem', marginTop: '0.4rem' }}>
                                 <button type="button" aria-label={`Decrease quantity of ${line.product.name}`} onClick={() => changeQuantity(lineKey(line), -1)} style={{ width: '30px', height: '30px', cursor: 'pointer' }}>−</button>
@@ -2631,19 +2642,19 @@ export default function App() {
                                 <button type="button" onClick={() => removeFromCart(lineKey(line))} style={{ marginLeft: '0.4rem', background: 'none', border: 'none', color: '#8b1e2d', textDecoration: 'underline', cursor: 'pointer' }}>{tr('Remove')}</button>
                               </div>
                             </div>
-                            <div style={{ fontWeight: 'bold', color: '#6e1a3a' }}>₹{lineUnitPrice(line.product, line.kuchu) * line.quantity}</div>
+                            <div style={{ fontWeight: 'bold', color: 'var(--mr-primary)' }}>₹{lineUnitPrice(line.product, line.kuchu) * line.quantity}</div>
                           </div>
                         ))}
                       </div>
 
-                      <div style={{ borderTop: '2px solid #6e1a3a', marginTop: '1rem', paddingTop: '0.8rem' }}>
+                      <div style={{ borderTop: '2px solid var(--mr-primary)', marginTop: '1rem', paddingTop: '0.8rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
                           <span>{tr('Items ({count})', { count: cartCount })}</span>
                           <span>₹{cartTotal}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', marginTop: '0.4rem', fontWeight: 'bold', fontSize: '1.1rem' }}>
                           <span>{tr('Order total')}</span>
-                          <span style={{ color: '#6e1a3a' }}>₹{cartTotal}</span>
+                          <span style={{ color: 'var(--mr-primary)' }}>₹{cartTotal}</span>
                         </div>
                         <p style={{ color: '#666', fontSize: '0.8rem', marginBottom: 0 }}>{tr('Courier charges are billed separately after your order is confirmed.')}</p>
                         {unavailableLines.length > 0 && (
@@ -2654,8 +2665,8 @@ export default function App() {
                       </div>
 
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', marginTop: '1.2rem' }}>
-                        <button type="button" onClick={() => setIsCartOpen(false)} style={{ flex: '1 1 140px', backgroundColor: '#fff', color: '#6e1a3a', border: '1px solid #6e1a3a', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>{tr('Continue shopping')}</button>
-                        <button type="button" disabled={unavailableLines.length > 0} onClick={() => { setIsCartOpen(false); setCheckoutStep(1); setIsCheckoutOpen(true); }} style={{ flex: '1 1 140px', backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: unavailableLines.length > 0 ? 'not-allowed' : 'pointer', opacity: unavailableLines.length > 0 ? 0.6 : 1, fontWeight: 'bold' }}>{tr('Proceed to checkout')}</button>
+                        <button type="button" onClick={() => setIsCartOpen(false)} style={{ flex: '1 1 140px', backgroundColor: '#fff', color: 'var(--mr-primary)', border: '1px solid var(--mr-primary)', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>{tr('Continue shopping')}</button>
+                        <button type="button" disabled={unavailableLines.length > 0} onClick={() => { setIsCartOpen(false); setCheckoutStep(1); setIsCheckoutOpen(true); }} style={{ flex: '1 1 140px', backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: unavailableLines.length > 0 ? 'not-allowed' : 'pointer', opacity: unavailableLines.length > 0 ? 0.6 : 1, fontWeight: 'bold' }}>{tr('Proceed to checkout')}</button>
                       </div>
                     </>
                   )}
@@ -2669,10 +2680,10 @@ export default function App() {
                 <div style={{ backgroundColor: '#fff', maxWidth: '550px', width: '100%', maxHeight: '90vh', overflowY: 'auto', borderRadius: '12px', padding: '1.8rem', position: 'relative' }}>
                   <button onClick={() => setIsCheckoutOpen(false)} style={{ position: 'absolute', top: '15px', right: '15px', border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>✕</button>
 
-                  <h2 style={{ color: '#6e1a3a', marginTop: 0 }}>{tr('Checkout')}</h2>
+                  <h2 style={{ color: 'var(--mr-primary)', marginTop: 0 }}>{tr('Checkout')}</h2>
 
                   {/* Order Summary */}
-                  <div style={{ backgroundColor: '#f7f2ef', padding: '0.8rem', borderRadius: '6px', marginBottom: '1.2rem', fontSize: '0.9rem' }}>
+                  <div style={{ backgroundColor: 'var(--mr-tint)', padding: '0.8rem', borderRadius: '6px', marginBottom: '1.2rem', fontSize: '0.9rem' }}>
                     <strong>{tr('Order summary')}</strong>
                     {cart.length === 0 ? (
                       <p style={{ margin: '0.4rem 0 0' }}>{tr('Your cart is empty.')}</p>
@@ -2743,7 +2754,7 @@ export default function App() {
                       <button
                         onClick={() => setCheckoutStep(2)}
                         disabled={!address.pincodeCheck || ['NOT_FOUND', 'NOT_SERVICEABLE'].includes(address.pincodeCheck.status) || (useSavedAddress ? !selectedAddressId : !isAddressComplete(address))}
-                        style={{ marginTop: '1.2rem', backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}
+                        style={{ marginTop: '1.2rem', backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}
                       >{tr('Next: Item Payment')}</button>
                     </div>
                   )}
@@ -2760,7 +2771,7 @@ export default function App() {
                           </div>
                         </div>
                       )}
-                      <div style={{ backgroundColor: '#f7f2ef', padding: '1rem', borderRadius: '6px', margin: '0.8rem 0' }}>
+                      <div style={{ backgroundColor: 'var(--mr-tint)', padding: '1rem', borderRadius: '6px', margin: '0.8rem 0' }}>
                         <p style={{ marginTop: 0, fontSize: '0.9rem' }}>{tr('Scan the payment QR provided by the host, pay, then attach the screenshot from your payment app. We will read the 12-digit UTR from it for you to check.')}</p>
                         <UpiPayBox upiId={upiId} payeeName={payeeName} amount={cartTotal} note="Mala Royale order" fallbackQrUrl={paymentQrUrl} tr={tr} />
                       </div>
@@ -2792,7 +2803,7 @@ export default function App() {
                         </label>
                       )}
                       <PaymentProofCapture file={paymentProof} onFile={setPaymentProof} utr={utr} onUtr={setUtr} expectedAmount={cartTotal} onCheck={setProofCheck} label={tr('Payment screenshot (PhonePe, GPay, Paytm or bank app)')} />
-                      <button type="submit" disabled={firebaseLoading || uploadingProof} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}>{uploadingProof ? tr('Uploading screenshot...') : t.placeOrder}</button>
+                      <button type="submit" disabled={firebaseLoading || uploadingProof} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}>{uploadingProof ? tr('Uploading screenshot...') : t.placeOrder}</button>
                     </form>
                   )}
                 </div>
@@ -2803,7 +2814,7 @@ export default function App() {
 
             {customerTab === 'ORDERS' && (
               <section aria-label={tr('Recent orders and tracking')}>
-                <h2 style={{ color: '#6e1a3a', marginTop: 0 }}>{t.myOrders}</h2>
+                <h2 style={{ color: 'var(--mr-primary)', marginTop: 0 }}>{t.myOrders}</h2>
                 {firebaseConfigured && !googleUser && (
                   <div style={{ backgroundColor: '#f1f8ff', border: '1px solid #cfe3f7', padding: '0.8rem', borderRadius: '6px', marginBottom: '1rem', fontSize: '0.85rem', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span>{tr('Placed an order before, or want to track orders from any device?')}</span>
@@ -2826,14 +2837,14 @@ export default function App() {
                 {activeOrders.length === 0 ? (
                   <div style={{ backgroundColor: '#fff', padding: '1.5rem', borderRadius: '8px', border: '1px solid #eee' }}>
                     <p style={{ marginTop: 0 }}>{firebaseConfigured && !googleUser ? tr('No orders on this device yet.') : tr('No orders yet.')}</p>
-                    <button type="button" onClick={() => setCustomerTab('SHOP')} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 0, padding: '0.6rem 1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>{tr('Browse the collection')}</button>
+                    <button type="button" onClick={() => setCustomerTab('SHOP')} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 0, padding: '0.6rem 1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>{tr('Browse the collection')}</button>
                   </div>
                 ) : [...activeOrders].sort(newestFirst).map(ord => { const open = Boolean(expandedOrders[ord.orderId]); return (
                   <article key={ord.orderId} className="mr-order-row" style={{ backgroundColor: '#fff', border: '1px solid #eee', padding: '0.8rem 1rem', borderRadius: '10px', marginBottom: '0.8rem' }}>
                     <button type="button" className="mr-order-head is-customer" aria-expanded={open} onClick={() => toggleOrder(ord.orderId)}>
                       <span style={{ minWidth: 0 }}><span className="mr-order-label">{tr('Order ID')}</span><div className="mr-order-value" style={{ fontFamily: 'monospace' }}>{ord.orderId}</div></span>
                       <span className="mr-col-date" style={{ minWidth: 0 }}><span className="mr-order-label">{tr('Placed on')}</span><div className="mr-order-value">{new Date(ord.createdAt).toLocaleDateString()}</div></span>
-                      <span><span className="mr-order-label">{tr('Total')}</span><div className="mr-order-value" style={{ color: '#6e1a3a' }}>₹{ord.itemTotal}</div></span>
+                      <span><span className="mr-order-label">{tr('Total')}</span><div className="mr-order-value" style={{ color: 'var(--mr-primary)' }}>₹{ord.itemTotal}</div></span>
                       <span className="mr-status-chip" style={getOrderStatusStyle(ord)}>{tr(getOrderStatus(ord))}</span>
                       <span className="mr-chevron" aria-hidden="true">›</span>
                     </button>
@@ -2860,7 +2871,7 @@ export default function App() {
                     {ord.itemPayment && <div style={{ margin: '0.4rem 0' }}><PaymentProofView url={ord.itemPayment.screenshotUrl} caption={tr('Your payment screenshot')} /></div>}
                     <p style={{ margin: '0.4rem 0', fontWeight: 'bold' }}>{tr('Order total: ₹')}{acceptedTotal(ord)}{(ord.rejectedTotal || 0) > 0 && <span style={{ color: '#8b1e2d', fontWeight: 'normal' }}> ({tr('₹')}{ord.rejectedTotal} {tr('of your items were rejected; originally ₹')}{ord.itemTotal})</span>}</p>
                     <p style={{ margin: '0.4rem 0', color: '#666', fontSize: '0.85rem' }}>{tr('Last updated')} {new Date(ord.updatedAt).toLocaleString()}</p>
-                    <div style={{ margin: '0.7rem 0', padding: '0.75rem', backgroundColor: '#f7f2ef', borderRadius: '6px' }}>
+                    <div style={{ margin: '0.7rem 0', padding: '0.75rem', backgroundColor: 'var(--mr-tint)', borderRadius: '6px' }}>
                       <strong>{tr('Delivery address submitted')}</strong>
                       <p style={{ margin: '0.35rem 0' }}>{ord.address.fullName} · {ord.address.phone}</p>
                       <p style={{ margin: '0.35rem 0' }}>
@@ -2897,9 +2908,9 @@ export default function App() {
               <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1100, padding: '1rem' }}>
                 <div role="dialog" aria-label={tr('Order placed')} style={{ backgroundColor: '#fff', maxWidth: '460px', width: '100%', maxHeight: '90vh', overflowY: 'auto', borderRadius: '12px', padding: '1.8rem', textAlign: 'center' }}>
                   <div style={{ fontSize: '2.4rem' }} aria-hidden="true">✅</div>
-                  <h2 style={{ color: '#6e1a3a', margin: '0.3rem 0' }}>{tr('Order placed!')}</h2>
+                  <h2 style={{ color: 'var(--mr-primary)', margin: '0.3rem 0' }}>{tr('Order placed!')}</h2>
                   <p style={{ margin: '0.3rem 0', color: '#555' }}>{tr('Thank you, {name}. Your order ID is:', { name: placedOrder.name })}</p>
-                  <div style={{ fontFamily: 'monospace', fontSize: '1.3rem', fontWeight: 'bold', backgroundColor: '#f7f2ef', padding: '0.7rem', borderRadius: '6px', letterSpacing: '0.04em', wordBreak: 'break-all' }}>{placedOrder.orderId}</div>
+                  <div style={{ fontFamily: 'monospace', fontSize: '1.3rem', fontWeight: 'bold', backgroundColor: 'var(--mr-tint)', padding: '0.7rem', borderRadius: '6px', letterSpacing: '0.04em', wordBreak: 'break-all' }}>{placedOrder.orderId}</div>
                   <button
                     type="button"
                     onClick={() => { void navigator.clipboard?.writeText(placedOrder.orderId).then(() => setOrderCopied(true)).catch(() => undefined); }}
@@ -2917,7 +2928,7 @@ export default function App() {
                       <GoogleSignInButton onClick={() => void handleGoogleSignIn()} disabled={firebaseLoading} label={tr('Sign in with Google')} />
                     </div>
                   )}
-                  <button type="button" onClick={() => setPlacedOrder(null)} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.7rem 1.2rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}>{tr('View my orders')}</button>
+                  <button type="button" onClick={() => setPlacedOrder(null)} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem 1.2rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}>{tr('View my orders')}</button>
                 </div>
               </div>
             )}
@@ -2926,6 +2937,42 @@ export default function App() {
 
       </div>
 
+      {viewProduct && (
+        <ProductQuickView
+          product={viewProduct}
+          variants={viewVariants}
+          related={viewRelated}
+          kuchuList={kuchuList}
+          kuchuId={kuchuChoice[viewProduct.id] || ''}
+          thread={threadChoice[viewProduct.id] || ''}
+          wished={wishlist.has(viewProduct.id)}
+          badges={cardBadges(viewProduct)}
+          onKuchu={id => setKuchuChoice(current => ({ ...current, [viewProduct.id]: id }))}
+          onThread={color => setThreadChoice(current => ({ ...current, [viewProduct.id]: color }))}
+          onVariant={id => setViewProductId(id)}
+          onOpen={id => setViewProductId(id)}
+          onAdd={() => {
+            const selection = selectionFor(viewProduct);
+            if (selection === 'MISSING_THREAD') { alert(tr('Please choose a thread colour for your Kuchu.')); return false; }
+            addToCart(viewProduct, selection);
+            trackAddToCart(viewProduct.id, viewProduct.category);
+            return true;
+          }}
+          onBuy={() => {
+            const selection = selectionFor(viewProduct);
+            if (selection === 'MISSING_THREAD') { alert(tr('Please choose a thread colour for your Kuchu.')); return; }
+            setViewProductId(null);
+            buyNow(viewProduct, selection);
+          }}
+          onToggleWish={() => wishlist.toggle(viewProduct.id)}
+          onShare={() => shareProduct(viewProduct)}
+          onClose={() => setViewProductId(null)}
+          onView={() => trackProductView(viewProduct.id, viewProduct.category)}
+          courierFor={pin => evaluateCourierRules({ items: [{ quantity: 1 }], pincode: pin, userId: customerKey, recentOrders: isStaff ? [] : activeOrders, config: shippingConfig, now: Date.now() })}
+          checkPincode={checkDeliveryPincode}
+          tr={tr}
+        />
+      )}
       {shareTarget && <Suspense fallback={null}><ShareMenu product={shareTarget} onClose={() => setShareTarget(null)} /></Suspense>}
 
       {!isStaff && (

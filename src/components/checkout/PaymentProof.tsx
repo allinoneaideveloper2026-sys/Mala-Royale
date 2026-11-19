@@ -164,7 +164,7 @@ export function ProofCheckBadges({ check, expectedAmount }: { check?: ProofCheck
 export function PaymentProofView({ url, caption = 'Payment screenshot' }: { url?: string; caption?: string }) {
   if (!isProofUrl(url)) return null;
   return (
-    <a href={url} target="_blank" rel="noreferrer noopener" style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.78rem', color: '#6e1a3a', textDecoration: 'none' }}>
+    <a href={url} target="_blank" rel="noreferrer noopener" style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.78rem', color: 'var(--mr-primary)', textDecoration: 'none' }}>
       <img src={url} alt={caption} loading="lazy" style={{ maxHeight: '110px', maxWidth: '160px', borderRadius: '6px', border: '1px solid #ddd', objectFit: 'cover' }} />
       <span>{caption} (tap to enlarge)</span>
     </a>

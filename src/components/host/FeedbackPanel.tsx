@@ -107,7 +107,7 @@ export default function FeedbackPanel({ feedback, onStatus, onDelete }: Feedback
               <article key={item.id} style={{ border: '1px solid #eee', borderLeft: `4px solid ${style.color}`, borderRadius: '8px', padding: '0.8rem', opacity: item.status === 'REVIEWED' ? 0.75 : 1 }}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
                   <span style={{ fontSize: '0.75rem', fontWeight: 'bold', padding: '0.15rem 0.6rem', borderRadius: '999px', background: style.background, color: style.color }}>{style.label}</span>
-                  <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.6rem', borderRadius: '999px', background: '#f1e3e9', color: '#6e1a3a' }}>{item.category}</span>
+                  <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.6rem', borderRadius: '999px', background: 'var(--mr-tint-strong)', color: 'var(--mr-primary)' }}>{item.category}</span>
                   <span style={{ fontSize: '0.75rem', color: '#777' }}>{LANGUAGE_NAME[item.language] || item.language} · {Math.round(item.confidence * 100)}% sure</span>
                   {item.status === 'REVIEWED' && <span style={{ fontSize: '0.75rem', color: '#2e7d32' }}>Reviewed</span>}
                 </div>

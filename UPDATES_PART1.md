@@ -52,3 +52,9 @@ Still to come: item IDs and colour variants, partial item rejection, Kuchu catal
 - worker/notificationService.ts with adapters: Gmail script (free), Resend, WhatsApp Cloud API. All OFF by default (wrangler.jsonc).
 - Events: order placed, courier quote added, payment verified, dispatched, delivered, cancelled, item rejected. Duplicates are blocked.
 - Setup guide: docs/gmail-notifier.gs and DEPLOY_CLOUDFLARE.md. Publish the new firestore.rules (notificationLog).
+
+## Phase 1: brand and storefront redesign
+- Brand: Royal Navy #101D38, Soft Gold #D9BD83, Ivory #FAF5E9, Classic Blue #263C60 (src/styles/brand.css). Logo, monogram, app icon, hero banner and icons in public/brand (cut from the brand sheet).
+- Sticky header with logo, category menu, search, saved items and bag. Hero banner, round category tiles, shop by colour, sticky filter bar, product cards with saved heart, quick view and colour swatches, product page with delivery check, loading skeletons, smooth transitions.
+- Developer view has two tabs: Developer Telemetry & Host Access (Home), and Host Management Panel.
+- Fonts (Cormorant Garamond, Inter) load from Google Fonts; the headers file allows them.

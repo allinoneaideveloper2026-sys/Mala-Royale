@@ -111,7 +111,7 @@ export function MediaLightbox({
   );
 }
 
-export function ProductGallery({ product, badges = [], onView }: { product: Product; badges?: string[]; onView?: () => void }) {
+export function ProductGallery({ product, badges = [], onView, overlay }: { product: Product; badges?: string[]; onView?: () => void; overlay?: React.ReactNode }) {
   const tr = useTr();
   const media: ProductMedia[] = product.media?.length
     ? product.media
@@ -130,9 +130,9 @@ export function ProductGallery({ product, badges = [], onView }: { product: Prod
     <div>
       <div className="mr-zoomable" style={{ position: 'relative', cursor: 'zoom-in' }} onClick={openViewer}>
         {selectedMedia.type === 'video' ? (
-          <video src={selectedMedia.url} controls playsInline preload="metadata" onClick={event => event.stopPropagation()} style={{ width: '100%', height: '200px', objectFit: 'cover', display: 'block' }} />
+          <video src={selectedMedia.url} controls playsInline preload="metadata" onClick={event => event.stopPropagation()} style={{ width: '100%', aspectRatio: '4 / 5', objectFit: 'cover', display: 'block' }} />
         ) : (
-          <img src={selectedMedia.url} alt={product.name} style={{ width: '100%', height: '200px', objectFit: 'cover', display: 'block' }} />
+          <img src={selectedMedia.url} alt={product.name} loading="lazy" style={{ width: '100%', aspectRatio: '4 / 5', objectFit: 'cover', display: 'block', background: 'var(--mr-tint)' }} />
         )}
         <button
           type="button"
@@ -142,6 +142,7 @@ export function ProductGallery({ product, badges = [], onView }: { product: Prod
         >
           {tr('⤢ View full')}
         </button>
+        {overlay}
         {badges.length > 0 && (
           <div style={{ position: 'absolute', top: '8px', left: '8px', display: 'flex', flexDirection: 'column', gap: '4px', pointerEvents: 'none' }}>
             {badges.map(badge => (
@@ -159,7 +160,7 @@ export function ProductGallery({ product, badges = [], onView }: { product: Prod
               aria-label={`Show ${item.type === 'video' ? 'video' : 'photo'} ${index + 1}`}
               aria-pressed={selectedIndex === index}
               onClick={() => setSelectedIndex(index)}
-              style={{ width: '56px', height: '48px', flex: '0 0 56px', padding: 0, border: selectedIndex === index ? '2px solid #6e1a3a' : '1px solid #ccc', cursor: 'pointer' }}
+              style={{ width: '56px', height: '48px', flex: '0 0 56px', padding: 0, border: selectedIndex === index ? '2px solid var(--mr-primary)' : '1px solid #ccc', cursor: 'pointer' }}
             >
               {item.type === 'video' ? (
                 <video src={item.url} muted playsInline preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />

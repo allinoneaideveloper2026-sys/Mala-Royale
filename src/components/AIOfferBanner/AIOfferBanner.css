@@ -8,7 +8,7 @@
   background:
     radial-gradient(circle at 15% 20%, rgba(255, 214, 140, 0.22), transparent 45%),
     radial-gradient(circle at 85% 80%, rgba(255, 120, 170, 0.25), transparent 50%),
-    linear-gradient(120deg, #3f0c22 0%, #6e1a3a 48%, #9b2c5a 100%);
+    linear-gradient(120deg, var(--mr-ink) 0%, var(--mr-primary) 48%, #9b2c5a 100%);
   color: #fff;
 }
 
@@ -67,7 +67,7 @@
   font-family: Georgia, serif;
   font-size: 2rem;
   font-weight: bold;
-  color: #6e1a3a;
+  color: var(--mr-primary);
 }
 
 .mr-hero-copy { min-width: 0; transform-style: preserve-3d; }
@@ -120,7 +120,7 @@
 }
 
 .mr-offer {
-  --mr-from: rgba(110, 26, 58, 0.9);
+  --mr-from: rgba(16, 29, 56, 0.9);
   --mr-to: rgba(170, 52, 98, 0.78);
   pointer-events: auto;
   position: relative;
@@ -278,7 +278,7 @@
   font-weight: 700;
   letter-spacing: 0.05em;
   color: #fff;
-  background: linear-gradient(135deg, #6e1a3a, #b03466);
+  background: linear-gradient(135deg, var(--mr-primary), var(--mr-blue));
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.25);
 }
 .mr-badge-new { background: linear-gradient(135deg, #0e7a5a, #22a572); animation: mr-badge-pulse 2.4s ease-in-out infinite; }

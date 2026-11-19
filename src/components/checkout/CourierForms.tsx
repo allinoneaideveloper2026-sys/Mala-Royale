@@ -102,7 +102,7 @@ export function CourierPaymentForm({
   };
 
   return (
-    <div style={{ marginTop: '0.7rem', padding: '0.8rem', backgroundColor: '#f7f2ef', borderRadius: '6px' }}>
+    <div style={{ marginTop: '0.7rem', padding: '0.8rem', backgroundColor: 'var(--mr-tint)', borderRadius: '6px' }}>
       <p style={{ margin: '0 0 0.35rem' }}>{tr('Courier charge:')} <strong>₹{order.courierBill.amount}</strong></p>
       {!order.courierPayment && <div style={{ margin: '0.6rem 0' }}><UpiPayBox upiId={upiId} payeeName={payeeName} amount={order.courierBill.amount} note="Mala Royale courier" fallbackQrUrl={paymentQrUrl} tr={tr} /></div>}
       {order.courierPayment ? (
@@ -116,7 +116,7 @@ export function CourierPaymentForm({
       ) : (
         <form onSubmit={submit} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.6rem' }}>
           <div style={{ flexBasis: '100%' }}><PaymentProofCapture file={proof} onFile={setProof} utr={utr} onUtr={setUtr} expectedAmount={order.courierBill.amount} onCheck={setCheck} label={tr('Payment screenshot (PhonePe, GPay, Paytm or bank app)')} /></div>
-          <button type="submit" disabled={submitting} style={{ alignSelf: 'end', backgroundColor: '#6e1a3a', color: '#fff', border: 0, borderRadius: '4px', padding: '0.6rem 0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>
+          <button type="submit" disabled={submitting} style={{ alignSelf: 'end', backgroundColor: 'var(--mr-primary)', color: '#fff', border: 0, borderRadius: '4px', padding: '0.6rem 0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>
             {submitting ? tr('Submitting...') : `Submit ₹${order.courierBill.amount} payment`}
           </button>
           {error && <span role="alert" style={{ flexBasis: '100%', color: '#b00020' }}>{error}</span>}

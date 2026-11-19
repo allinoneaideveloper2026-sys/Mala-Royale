@@ -74,7 +74,7 @@ export default function KuchuManager({
           Design photos (up to 8)
           <input type="file" accept="image/*" multiple onChange={e => setFiles(Array.from(e.target.files || []))} />
         </label>
-        <button type="submit" disabled={busy} style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>{busy ? 'Saving...' : 'Publish Kuchu'}</button>
+        <button type="submit" disabled={busy} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>{busy ? 'Saving...' : 'Publish Kuchu'}</button>
       </form>
       {error && <p role="alert" style={{ color: '#b00020', fontSize: '0.85rem' }}>{error}</p>}
 

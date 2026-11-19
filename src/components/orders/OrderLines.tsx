@@ -21,11 +21,11 @@ export default function OrderLines({
           <li key={`${item.productId}-${index}`} style={{ display: 'flex', gap: '0.7rem', alignItems: 'center', opacity: rejected ? 0.7 : 1 }}>
             {item.image
               ? <img src={item.image} alt={item.name} loading="lazy" style={{ width: '52px', height: '52px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #eee', flex: '0 0 52px' }} />
-              : <span aria-hidden="true" style={{ width: '52px', height: '52px', borderRadius: '6px', background: '#f1ebe8', flex: '0 0 52px' }} />}
+              : <span aria-hidden="true" style={{ width: '52px', height: '52px', borderRadius: '6px', background: 'var(--mr-tint)', flex: '0 0 52px' }} />}
             <div style={{ flex: 1, minWidth: 0, textDecoration: rejected ? 'line-through' : 'none' }}>
               <strong>{item.name}</strong>
-              {item.color && <span style={{ marginLeft: '0.4rem', fontSize: '0.78rem', padding: '0.1rem 0.5rem', borderRadius: '999px', background: '#f3e9ef', color: '#6e1a3a', fontWeight: 'bold' }}>{item.color}</span>}
-              {item.kuchuName && <div style={{ fontSize: '0.78rem', color: '#6e1a3a' }}>Kuchu: {item.kuchuName} <code>{item.kuchuId}</code> (+₹{item.kuchuPrice}){item.threadColor ? ` · Thread: ${item.threadColor}` : ''}</div>}
+              {item.color && <span style={{ marginLeft: '0.4rem', fontSize: '0.78rem', padding: '0.1rem 0.5rem', borderRadius: '999px', background: 'var(--mr-tint-strong)', color: 'var(--mr-primary)', fontWeight: 'bold' }}>{item.color}</span>}
+              {item.kuchuName && <div style={{ fontSize: '0.78rem', color: 'var(--mr-primary)' }}>Kuchu: {item.kuchuName} <code>{item.kuchuId}</code> (+₹{item.kuchuPrice}){item.threadColor ? ` · Thread: ${item.threadColor}` : ''}</div>}
               <div style={{ fontSize: '0.8rem', color: '#555' }}>
                 {item.itemCode && <code style={{ marginRight: '0.5rem' }}>{item.itemCode}</code>}
                 × {item.quantity} · ₹{lineAmount(item)}

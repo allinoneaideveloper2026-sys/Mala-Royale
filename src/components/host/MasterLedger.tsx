@@ -61,7 +61,7 @@ const matchesStatus = (order: Order, filter: StatusFilter): boolean => {
 };
 
 const cellStyle: React.CSSProperties = { padding: '0.5rem 0.6rem', borderBottom: '1px solid #eee', verticalAlign: 'top', fontSize: '0.8rem' };
-const headStyle: React.CSSProperties = { ...cellStyle, position: 'sticky', top: 0, background: '#f7f2ef', fontWeight: 'bold', textAlign: 'left', whiteSpace: 'nowrap', zIndex: 1 };
+const headStyle: React.CSSProperties = { ...cellStyle, position: 'sticky', top: 0, background: 'var(--mr-tint)', fontWeight: 'bold', textAlign: 'left', whiteSpace: 'nowrap', zIndex: 1 };
 
 export default function MasterLedger({ orders, products, onSaveDelivery, onDeleteRow }: MasterLedgerProps) {
   const [query, setQuery] = useState('');
@@ -238,7 +238,7 @@ export default function MasterLedger({ orders, products, onSaveDelivery, onDelet
                       type="button"
                       disabled={!isDirty(order) || savingId === order.orderId}
                       onClick={() => void save(order)}
-                      style={{ backgroundColor: '#6e1a3a', color: '#fff', border: 'none', borderRadius: '4px', padding: '0.4rem 0.8rem', cursor: isDirty(order) ? 'pointer' : 'not-allowed', opacity: isDirty(order) ? 1 : 0.5 }}
+                      style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', borderRadius: '4px', padding: '0.4rem 0.8rem', cursor: isDirty(order) ? 'pointer' : 'not-allowed', opacity: isDirty(order) ? 1 : 0.5 }}
                     >
                       {savingId === order.orderId ? 'Saving...' : 'Save'}
                     </button>
@@ -261,12 +261,12 @@ export default function MasterLedger({ orders, products, onSaveDelivery, onDelet
             </tbody>
             <tfoot>
               <tr>
-                <td style={{ ...cellStyle, fontWeight: 'bold', background: '#f7f2ef' }} colSpan={7}>Totals for the {rows.length} orders shown</td>
-                <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: '#f7f2ef' }}>{inr(totals.items)}</td>
-                <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: '#f7f2ef' }}>{inr(totals.offer)}</td>
-                <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: '#f7f2ef' }}>{inr(totals.courier)}</td>
-                <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: '#f7f2ef' }}>{inr(totals.grand)}</td>
-                <td style={{ ...cellStyle, background: '#f7f2ef' }} colSpan={5} />
+                <td style={{ ...cellStyle, fontWeight: 'bold', background: 'var(--mr-tint)' }} colSpan={7}>Totals for the {rows.length} orders shown</td>
+                <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: 'var(--mr-tint)' }}>{inr(totals.items)}</td>
+                <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: 'var(--mr-tint)' }}>{inr(totals.offer)}</td>
+                <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: 'var(--mr-tint)' }}>{inr(totals.courier)}</td>
+                <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 'bold', background: 'var(--mr-tint)' }}>{inr(totals.grand)}</td>
+                <td style={{ ...cellStyle, background: 'var(--mr-tint)' }} colSpan={5} />
               </tr>
             </tfoot>
           </table>
