@@ -381,3 +381,40 @@ describe('Kuchu pricing, IDs and cart lines', () => {
     expect(lineKey({ product: saree, kuchu: kuchus[0], threadColor: 'Gold' })).toBe(lineKey({ product: saree, kuchu: kuchus[0], threadColor: 'Gold' }));
   });
 });
+
+import { DEFAULT_PAGES, FINAL_SALE_LINE, boldParts, fillTokens, mergePages, parseBlocks } from '../src/domain/sitePages';
+
+describe('editable site pages', () => {
+  it('turns text into headings, paragraphs and lists', () => {
+    const blocks = parseBlocks('## Title\n\nHello **world**\n- one\n- two\n\nLast');
+    expect(blocks.map(block => block.kind)).toEqual(['heading', 'paragraph', 'list', 'paragraph']);
+    expect((blocks[2] as any).items).toEqual(['one', 'two']);
+    expect(boldParts('a **b** c').map(part => part.bold)).toEqual([false, true, false]);
+  });
+  it('keeps pasted HTML as plain text', () => {
+    const blocks = parseBlocks('<script>alert(1)</script>');
+    expect(blocks[0].kind).toBe('paragraph');
+  });
+  it('fills the shop name and WhatsApp number', () => {
+    expect(fillTokens('Hi {{shop}} {{whatsapp}}', { shop: 'Mala Royale', whatsapp: '+91 98765 43210' })).toBe('Hi Mala Royale +91 98765 43210');
+    expect(fillTokens('{{whatsapp}}', { shop: 'x', whatsapp: '' }).includes('add your WhatsApp')).toBe(true);
+  });
+  it('ships a terms page that states the final-sale rule', () => {
+    expect(DEFAULT_PAGES.terms.body.includes(FINAL_SALE_LINE)).toBe(true);
+    expect(DEFAULT_PAGES.terms.body.includes('NO RETURN and NO REFUND')).toBe(true);
+  });
+  it('uses stored text where present and the default otherwise', () => {
+    const merged = mergePages({ about: { title: 'Our story', body: 'Custom text' } });
+    expect(merged.about.title).toBe('Our story');
+    expect(merged.contact.title).toBe('Contact us');
+  });
+});
+
+import { choiceKey } from '../src/domain/kuchu';
+
+describe('Kuchu choice stays when the colour changes', () => {
+  it('uses the design key so every colour of a design shares the choice', () => {
+    expect(choiceKey({ id: 'p1', designKey: 'SILK-ZRI' })).toBe(choiceKey({ id: 'p2', designKey: 'SILK-ZRI' }));
+    expect(choiceKey({ id: 'p3' })).toBe('p3');
+  });
+});

@@ -77,7 +77,17 @@ service cloud.firestore {
 
     match /settings/{settingId} {
       allow read: if true;
-      allow write: if isStaff();
+      // The site pages (About, Contact, Terms) can only be edited by the developer.
+      allow write: if isStaff() && settingId != 'pages';
+    }
+
+    match /settings/pages {
+      allow read: if true;
+      allow write: if isDeveloper()
+        && request.resource.data.keys().hasOnly(['about', 'contact', 'terms', 'updatedAt'])
+        && request.resource.data.about.body.size() <= 12000
+        && request.resource.data.contact.body.size() <= 12000
+        && request.resource.data.terms.body.size() <= 20000;
     }
 
     match /orders/{orderId} {

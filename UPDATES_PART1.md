@@ -58,3 +58,10 @@ Still to come: item IDs and colour variants, partial item rejection, Kuchu catal
 - Sticky header with logo, category menu, search, saved items and bag. Hero banner, round category tiles, shop by colour, sticky filter bar, product cards with saved heart, quick view and colour swatches, product page with delivery check, loading skeletons, smooth transitions.
 - Developer view has two tabs: Developer Telemetry & Host Access (Home), and Host Management Panel.
 - Fonts (Cormorant Garamond, Inter) load from Google Fonts; the headers file allows them.
+
+## Feedback round after Phase 1
+- Removed the All / Saree / Custom Kuchu tabs and the Kuchu home section. The header shows About us and Contact links instead.
+- Kuchu is chosen from a drop-down under the colour choice (No Kuchu or one design). Thread colours are removed. The choice carries into the cart, the order line and the item ID (e.g. SILK-ZRI-MAR-KCH03-63M).
+- The final-sale line is shown only at the bottom of checkout, in small text, when the bag has a Kuchu.
+- About us, Contact and Terms & Conditions pages with a footer. The developer edits them in the new "Site Pages" tab. Publish the new firestore.rules.
+- A friendly "collection is being prepared" message when the catalog is empty.
