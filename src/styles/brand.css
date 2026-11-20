@@ -60,13 +60,21 @@ button, input, select, textarea { font-family: inherit; }
 .mr-nav button::after { content: ''; position: absolute; left: 0; right: 0; bottom: 4px; height: 2px; background: var(--mr-gold); transform: scaleX(0); transform-origin: left; transition: transform 0.3s var(--mr-ease); }
 .mr-nav button:hover::after, .mr-nav button[aria-current='true']::after { transform: scaleX(1); }
 
-/* ---------- hero ---------- */
-.mr-hero { position: relative; overflow: hidden; background: var(--mr-navy); }
-.mr-hero img { width: 100%; display: block; max-height: 520px; object-fit: cover; object-position: center; animation: mr-kenburns 22s ease-in-out infinite alternate; }
-.mr-hero-cta { position: absolute; left: 0; right: 0; bottom: 6%; display: flex; gap: 0.8rem; justify-content: center; flex-wrap: wrap; padding: 0 1rem; animation: mr-fade-up 0.9s var(--mr-ease) both 0.2s; }
-.mr-hero::after { content: ''; position: absolute; inset: auto 0 0 0; height: 40%; background: linear-gradient(to top, rgba(11, 20, 40, 0.55), transparent); pointer-events: none; }
-.mr-hero-cta { z-index: 2; }
-@keyframes mr-kenburns { from { transform: scale(1); } to { transform: scale(1.06); } }
+/* ---------- hero ----------
+   The banner artwork is 1254 x 578. It is shown whole (never cropped) at its own proportions and never stretched past its
+   real width, so it stays sharp. On wide screens the sides fill with the same navy and the edges fade into it. */
+.mr-hero { background: var(--mr-navy); text-align: center; }
+.mr-hero img {
+  display: block;
+  width: 100%;
+  max-width: 1254px;
+  height: auto;
+  margin: 0 auto;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 7%, #000 93%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 7%, #000 93%, transparent 100%);
+}
+@media (max-width: 1254px) { .mr-hero img { -webkit-mask-image: none; mask-image: none; } }
+.mr-hero-cta { display: flex; gap: 0.8rem; justify-content: center; flex-wrap: wrap; padding: 0.9rem 1rem 1.3rem; animation: mr-fade-up 0.8s var(--mr-ease) both 0.15s; }
 
 /* ---------- section helpers ---------- */
 .mr-wrap { max-width: 1240px; margin: 0 auto; padding: 0 1rem; }
@@ -157,5 +165,4 @@ button, input, select, textarea { font-family: inherit; }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.28s; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
-  .mr-hero img { animation: none; }
 }

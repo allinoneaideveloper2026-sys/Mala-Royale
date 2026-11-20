@@ -3,9 +3,8 @@ import { BagIcon, HeartIcon, SearchIcon } from './Icons';
 
 /** Sticky header: logo, category menu, search, saved items and the bag. */
 export default function SiteHeader({
-  categories,
-  activeCategory,
-  onCategory,
+  links,
+  onHome,
   search,
   onSearch,
   wishlistCount,
@@ -16,9 +15,9 @@ export default function SiteHeader({
   shopping,
   tr,
 }: {
-  categories: string[];
-  activeCategory: string;
-  onCategory: (category: string) => void;
+  /** Page links such as About us and Contact. */
+  links: Array<{ label: string; onClick: () => void }>;
+  onHome: () => void;
   search: string;
   onSearch: (value: string) => void;
   wishlistCount: number;
@@ -33,7 +32,7 @@ export default function SiteHeader({
   return (
     <header className="mr-header">
       <div className="mr-header-row">
-        <a className="mr-logo" href="#top" aria-label="Mala Royale home" onClick={event => { event.preventDefault(); onCategory('All'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>
+        <a className="mr-logo" href="#top" aria-label="Mala Royale home" onClick={event => { event.preventDefault(); onHome(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>
           <img className="mr-logo-wordmark" src="./brand/logo-wordmark-ivory.webp" alt="Mala Royale - Where Tradition Meets Royalty" width="132" height="48" />
         </a>
         {shopping && (
@@ -57,11 +56,9 @@ export default function SiteHeader({
           )}
         </div>
       </div>
-      {shopping && (
-        <nav className="mr-nav" aria-label={tr('Categories')}>
-          {['All', ...categories].map(category => (
-            <button key={category} type="button" aria-current={activeCategory === category} onClick={() => onCategory(category)}>{tr(category)}</button>
-          ))}
+      {links.length > 0 && (
+        <nav className="mr-nav" aria-label={tr('Information')}>
+          {links.map(link => <button key={link.label} type="button" onClick={link.onClick}>{link.label}</button>)}
         </nav>
       )}
     </header>

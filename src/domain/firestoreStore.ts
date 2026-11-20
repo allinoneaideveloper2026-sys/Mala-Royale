@@ -20,6 +20,7 @@ import { loadWithCache, writeCache } from './cache';
 import { validateRefundDetails } from './refund';
 import { isValidUpiId } from './upi';
 import { designKeyFor } from './itemCode';
+import { mergePages, type SitePages } from './sitePages';
 import { activeQuantityByProduct, rejectLine } from './orderItems';
 import { DEFAULT_SHIPPING, type CourierDecision, type ShippingConfig } from './shipping';
 import { isValidUtr, validateProofFile } from './paymentProof';
@@ -176,7 +177,7 @@ export async function publishProduct(product: Product): Promise<void> {
 
 export async function updateProduct(
   productId: string,
-  changes: { name: string; category: string; price: number; offerPrice?: number; quantity: number; status: ProductStatus; itemCode?: string; color?: string; colorCode?: string; size?: string; categoryCode?: string; patternCode?: string; compatibleKuchuIds?: string[]; threadColors?: string[] },
+  changes: { name: string; category: string; price: number; offerPrice?: number; quantity: number; status: ProductStatus; itemCode?: string; color?: string; colorCode?: string; size?: string; categoryCode?: string; patternCode?: string; compatibleKuchuIds?: string[] },
 ): Promise<void> {
   const db = requireFirestore();
   const designKey = designKeyFor(changes.categoryCode || '', changes.patternCode || '');
@@ -187,7 +188,6 @@ export async function updateProduct(
       designKey: designKey ? designKey : deleteField(),
     } : {}),
     ...(changes.compatibleKuchuIds !== undefined ? { compatibleKuchuIds: changes.compatibleKuchuIds } : {}),
-    ...(changes.threadColors !== undefined ? { threadColors: changes.threadColors } : {}),
     ...(changes.itemCode ? { itemCode: changes.itemCode } : {}),
     ...(changes.color !== undefined ? { color: changes.color, colorCode: changes.colorCode || '' } : {}),
     ...(changes.size !== undefined ? { size: changes.size } : {}),
@@ -310,6 +310,40 @@ export function subscribeShippingConfig(onChange: (config: ShippingConfig) => vo
 export async function saveShippingConfig(config: ShippingConfig): Promise<void> {
   const db = requireFirestore();
   await setDoc(doc(db, 'settings', 'shipping'), { ...config, updatedAt: new Date().toISOString() });
+}
+
+// Editable site pages (About us, Contact, Terms). Customers read them (cached); only the developer can change them.
+export function subscribeSitePages(onChange: (pages: SitePages) => void, onError: (error: Error) => void, options: { live?: boolean } = {}) {
+  const db = requireFirestore();
+  const read = (data: Record<string, unknown> | undefined) => mergePages(data as Parameters<typeof mergePages>[0]);
+  if (!options.live) {
+    return loadWithCache<SitePages>({
+      key: 'site-pages',
+      ttlMs: PUBLIC_CACHE_TTL_MS,
+      load: async () => {
+        const snapshot = await getDoc(doc(db, 'settings', 'pages'));
+        return read(snapshot.exists() ? snapshot.data() : undefined);
+      },
+      onChange,
+      onError,
+    });
+  }
+  return onSnapshot(doc(db, 'settings', 'pages'), snapshot => {
+    const pages = read(snapshot.exists() ? snapshot.data() : undefined);
+    writeCache('site-pages', pages);
+    onChange(pages);
+  }, onError);
+}
+
+export async function saveSitePages(pages: SitePages): Promise<void> {
+  const db = requireFirestore();
+  const clean = (value: string, max: number) => value.slice(0, max);
+  await setDoc(doc(db, 'settings', 'pages'), {
+    about: { title: clean(pages.about.title, 80), body: clean(pages.about.body, 12000) },
+    contact: { title: clean(pages.contact.title, 80), body: clean(pages.contact.body, 12000) },
+    terms: { title: clean(pages.terms.title, 80), body: clean(pages.terms.body, 20000) },
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 export async function saveUpiSettings(upiId: string, payeeName: string): Promise<void> {
@@ -460,9 +494,6 @@ export async function createCloudOrder(
         const kuchu = kuchuById.get(line.kuchuId);
         if (!kuchu || kuchu.active === false || !(product.compatibleKuchuIds || []).includes(line.kuchuId)) {
           throw new Error(`The Kuchu design for "${product.name}" is no longer available. Please choose again.`);
-        }
-        if (line.threadColor && !(product.threadColors || []).includes(line.threadColor)) {
-          throw new Error(`The thread colour for "${product.name}" is no longer available. Please choose again.`);
         }
         expected += kuchu.price;
       }

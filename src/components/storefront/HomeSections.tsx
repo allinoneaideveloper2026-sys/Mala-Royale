@@ -1,14 +1,13 @@
 import React from 'react';
 
 /** Full-width banner with the brand artwork and two shortcuts. */
-export function HeroBanner({ onShop, tr }: { onShop: (category: string) => void; tr: (text: string) => string }) {
+export function HeroBanner({ onShop, tr }: { onShop: () => void; tr: (text: string) => string }) {
   return (
     <section className="mr-hero" aria-label="Mala Royale">
       <h1 className="mr-sr-only">Mala Royale - Where Tradition Meets Royalty</h1>
       <img src="./brand/hero-banner.webp" alt="" width="1254" height="578" fetchPriority="high" />
       <div className="mr-hero-cta">
-        <button type="button" className="mr-btn mr-btn-gold" onClick={() => onShop('Sarees')}>{tr('Shop Sarees')}</button>
-        <button type="button" className="mr-btn" style={{ background: 'rgba(16,29,56,0.85)', color: 'var(--mr-gold)', borderColor: 'var(--mr-gold)' }} onClick={() => onShop('Custom Kuchu')}>{tr('Kuchu Work')}</button>
+        <button type="button" className="mr-btn mr-btn-gold" onClick={onShop}>{tr('Shop Sarees')}</button>
       </div>
     </section>
   );

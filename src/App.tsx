@@ -11,6 +11,10 @@ import { CategoryTiles, ColorRow, HeroBanner, ProductSkeletons, type CategoryTil
 import KuchuPicker from './components/storefront/KuchuPicker';
 import ProductQuickView from './components/storefront/ProductQuickView';
 import { HeartIcon } from './components/storefront/Icons';
+import SiteFooter from './components/storefront/SiteFooter';
+import SitePageView from './components/storefront/SitePageView';
+import SitePagesEditor from './components/host/SitePagesEditor';
+import { DEFAULT_PAGES, fillTokens, type SitePageKey, type SitePages } from './domain/sitePages';
 import { useWishlist } from './app/wishlist';
 import { withViewTransition } from './app/transitions';
 import { cardBadges, discountPercent, type OfferAction } from './components/AIOfferBanner/offerEngine';
@@ -35,9 +39,9 @@ import { withTimeout, getOrderStatus, getOrderStatusStyle, newestFirst } from '.
 import { validateRefundDetails } from './domain/refund';
 import UpiPayBox from './components/checkout/UpiPayBox';
 import ConfirmDialog, { type DialogResult, type DialogReason } from './components/host/ConfirmDialog';
-import { deleteKuchu, publishKuchu, refreshKuchuFresh, rejectCloudOrderItem, subscribeKuchu, updateKuchu } from './domain/firestoreStore';
+import { saveSitePages, subscribeSitePages, deleteKuchu, publishKuchu, refreshKuchuFresh, rejectCloudOrderItem, subscribeKuchu, updateKuchu } from './domain/firestoreStore';
 import KuchuManager from './components/host/KuchuManager';
-import { FINAL_SALE_DETAIL, FINAL_SALE_HEADLINE, compatibleKuchu, itemCodeWithKuchu, lineKey, lineUnitPrice, lineRegularPrice } from './domain/kuchu';
+import { FINAL_SALE_HEADLINE, choiceKey, compatibleKuchu, itemCodeWithKuchu, lineKey, lineUnitPrice, lineRegularPrice } from './domain/kuchu';
 import { deleteHostRecord, deleteOrderForever, getMyHostRecord, logAudit, restoreOrder, saveHostRecord, setHostActive, softDeleteOrder, subscribeAuditLog, subscribeHostRecords, validateHostRecord } from './domain/adminStore';
 import { useOrderUpdates } from './app/orderUpdates';
 import ReportPaymentIssue from './components/checkout/ReportPaymentIssue';
@@ -113,16 +117,16 @@ export default function App() {
   const [colorFilter, setColorFilter] = useState('');
   const [wishOnly, setWishOnly] = useState(false);
   const [viewProductId, setViewProductId] = useState<string | null>(null);
-  const [devView, setDevView] = useState<'HOME' | 'HOST'>('HOME');
+  const [devView, setDevView] = useState<'HOME' | 'HOST' | 'PAGES'>('HOME');
+  const [sitePages, setSitePages] = useState<SitePages>(DEFAULT_PAGES);
+  const [pageView, setPageView] = useState<SitePageKey | null>(null);
   const [productsReady, setProductsReady] = useState(!firebaseConfigured);
   const wishlist = useWishlist();
   const [kuchuList, setKuchuList] = useState<KuchuDesign[]>([]);
   const [kuchuChoice, setKuchuChoice] = useState<Record<string, string>>({});
-  const [threadChoice, setThreadChoice] = useState<Record<string, string>>({});
-  const [finalSaleAccepted, setFinalSaleAccepted] = useState(false);
   const [colorSuggestions, setColorSuggestions] = useState<PaletteColor[]>([]);
   const [lastPublished, setLastPublished] = useState<Product | null>(null);
-  const [newProduct, setNewProduct] = useState({ name: '', category: 'Sarees', price: '', offerPrice: '', quantity: '1', description: '', image: '', categoryCode: '', patternCode: '', color: '', size: '', kuchuCode: '', itemCode: '', compatibleKuchuIds: [] as string[], threadColors: [] as string[] });
+  const [newProduct, setNewProduct] = useState({ name: '', category: 'Sarees', price: '', offerPrice: '', quantity: '1', description: '', image: '', categoryCode: '', patternCode: '', color: '', size: '', kuchuCode: '', itemCode: '', compatibleKuchuIds: [] as string[] });
   const [productMediaFiles, setProductMediaFiles] = useState<File[]>([]);
   const [paymentQrUrl, setPaymentQrUrl] = useState('');
   const [paymentQrFile, setPaymentQrFile] = useState<File | null>(null);
@@ -359,6 +363,23 @@ export default function App() {
       setPayeeDraft(upi.payeeName);
     }, error => setSyncError(error.message), { live: isStaff });
   }, [isStaff]);
+
+  // Site pages (About us, Contact, Terms): customers read them (cached); the developer edits them.
+  useEffect(() => {
+    if (!firebaseConfigured) return;
+    return subscribeSitePages(setSitePages, () => undefined, { live: role === 'DEVELOPER' });
+  }, [role]);
+
+  // A link like #page=terms opens that page.
+  useEffect(() => {
+    const open = () => {
+      const match = /^#page=(about|contact|terms)$/.exec(window.location.hash);
+      if (match) setPageView(match[1] as SitePageKey);
+    };
+    open();
+    window.addEventListener('hashchange', open);
+    return () => window.removeEventListener('hashchange', open);
+  }, []);
 
   // Kuchu designs: customers read them (cached); staff see changes live.
   useEffect(() => {
@@ -735,7 +756,6 @@ export default function App() {
         ...(newProduct.kuchuCode.trim() ? { kuchuCode: newProduct.kuchuCode.trim().toUpperCase() } : {}),
         ...(designKeyFor(newProduct.categoryCode, newProduct.patternCode) ? { designKey: designKeyFor(newProduct.categoryCode, newProduct.patternCode) } : {}),
         ...(newProduct.compatibleKuchuIds.length > 0 ? { compatibleKuchuIds: newProduct.compatibleKuchuIds } : {}),
-        ...(newProduct.threadColors.length > 0 ? { threadColors: newProduct.threadColors } : {}),
       };
       if (firebaseConfigured) {
         await withTimeout(publishProduct(addedProduct), 60000, 'Saving the item is taking too long. Check your connection; if it does not appear in the catalog, try again.');
@@ -743,7 +763,7 @@ export default function App() {
       } else {
         setProducts([addedProduct, ...products]);
       }
-      setNewProduct({ name: '', category: 'Sarees', price: '', offerPrice: '', quantity: '1', description: '', image: '', categoryCode: '', patternCode: '', color: '', size: '', kuchuCode: '', itemCode: '', compatibleKuchuIds: [] as string[], threadColors: [] as string[] });
+      setNewProduct({ name: '', category: 'Sarees', price: '', offerPrice: '', quantity: '1', description: '', image: '', categoryCode: '', patternCode: '', color: '', size: '', kuchuCode: '', itemCode: '', compatibleKuchuIds: [] as string[] });
       setProductMediaFiles([]);
       setColorSuggestions([]);
       setLastPublished(addedProduct);
@@ -794,7 +814,7 @@ export default function App() {
   // Host Action: Edit or remove a published product
   const handleUpdateProduct = async (
     productId: string,
-    changes: { name: string; category: string; price: number; offerPrice?: number; quantity: number; status: ProductStatus; itemCode?: string; color?: string; colorCode?: string; size?: string; categoryCode?: string; patternCode?: string; compatibleKuchuIds?: string[]; threadColors?: string[] },
+    changes: { name: string; category: string; price: number; offerPrice?: number; quantity: number; status: ProductStatus; itemCode?: string; color?: string; colorCode?: string; size?: string; categoryCode?: string; patternCode?: string; compatibleKuchuIds?: string[] },
   ) => {
     try {
       if (firebaseConfigured) {
@@ -1112,6 +1132,16 @@ export default function App() {
     }
   };
 
+  const handleSaveSitePages = async (pages: SitePages) => {
+    if (role !== 'DEVELOPER') return;
+    if (!(await askAccept('Publish these page changes?', 'About us, Contact and Terms & Conditions will show this text to customers straight away.', 'Publish pages'))) return;
+    if (firebaseConfigured) {
+      await withTimeout(saveSitePages(pages), 30000, 'Saving is taking too long. Check your internet connection and try again.');
+      audit('SITE_PAGES_EDITED', 'settings', 'pages', 'Edited the About, Contact or Terms pages');
+    }
+    setSitePages(pages);
+  };
+
   const handleSaveShipping = async () => {
     const prefixes = parsePrefixes(prefixDraft);
     if (shippingConfig.ruleBEnabled && prefixes.length === 0) {
@@ -1308,9 +1338,9 @@ export default function App() {
   };
 
   // Cart Management
-  type KuchuSelection = { kuchu?: KuchuDesign; threadColor?: string };
+  type KuchuSelection = { kuchu?: KuchuDesign };
   const addToCart = (product: Product, selection?: KuchuSelection) => isPurchasable(product) && setCart(current => {
-    const candidate: CartLine = { product, quantity: 1, ...(selection?.kuchu ? { kuchu: selection.kuchu, ...(selection.threadColor ? { threadColor: selection.threadColor } : {}) } : {}) };
+    const candidate: CartLine = { product, quantity: 1, ...(selection?.kuchu ? { kuchu: selection.kuchu } : {}) };
     const key = lineKey(candidate);
     const limit = maxOrderable(products.find(item => item.id === product.id) || product);
     const sameProduct = current.filter(line => line.product.id === product.id).reduce((sum, line) => sum + line.quantity, 0);
@@ -1335,13 +1365,10 @@ export default function App() {
     setCustomerTab('SHOP');
   };
   // What the customer picked on a saree card: none, or one Kuchu design with a thread colour.
-  const selectedKuchuFor = (product: Product): KuchuDesign | null => compatibleKuchu(product, kuchuList).find(item => item.id === kuchuChoice[product.id]) || null;
-  const selectionFor = (product: Product): KuchuSelection | 'MISSING_THREAD' => {
+  const selectedKuchuFor = (product: Product): KuchuDesign | null => compatibleKuchu(product, kuchuList).find(item => item.id === kuchuChoice[choiceKey(product)]) || null;
+  const selectionFor = (product: Product): KuchuSelection => {
     const kuchu = selectedKuchuFor(product);
-    if (!kuchu) return {};
-    const thread = threadChoice[product.id];
-    if ((product.threadColors || []).length > 0 && !thread) return 'MISSING_THREAD';
-    return { kuchu, ...(thread ? { threadColor: thread } : {}) };
+    return kuchu ? { kuchu } : {};
   };
   const cartCount = cart.reduce((count, line) => count + line.quantity, 0);
   const cartTotal = cart.reduce((sum, line) => sum + lineUnitPrice(line.product, line.kuchu) * line.quantity, 0);
@@ -1411,10 +1438,6 @@ export default function App() {
         alert(tr('Enter a valid email address to get updates by email, or untick the email box.'));
         return;
       }
-      if (cartHasKuchu && !finalSaleAccepted) {
-        alert(tr('Please accept the final-sale rule to order a saree with a Kuchu.'));
-        return;
-      }
       if (proofCheck?.blocking) {
         alert(proofCheck.blocking);
         return;
@@ -1435,7 +1458,7 @@ export default function App() {
       } else {
         proofUrl = URL.createObjectURL(paymentProof);
       }
-      const orderItems = cart.map(line => ({ productId: line.product.id, name: line.product.name, price: lineUnitPrice(line.product, line.kuchu), regularPrice: lineRegularPrice(line.product, line.kuchu), quantity: line.quantity, ...(line.product.color ? { color: line.product.color } : {}), ...((line.kuchu ? itemCodeWithKuchu(line.product.itemCode, line.kuchu.id) : line.product.itemCode) ? { itemCode: line.kuchu ? itemCodeWithKuchu(line.product.itemCode, line.kuchu.id) : line.product.itemCode } : {}), ...(line.product.image ? { image: line.product.image } : {}), ...(line.kuchu ? { kuchuId: line.kuchu.id, kuchuName: line.kuchu.name, kuchuPrice: line.kuchu.price, ...(line.threadColor ? { threadColor: line.threadColor } : {}) } : {}) }));
+      const orderItems = cart.map(line => ({ productId: line.product.id, name: line.product.name, price: lineUnitPrice(line.product, line.kuchu), regularPrice: lineRegularPrice(line.product, line.kuchu), quantity: line.quantity, ...(line.product.color ? { color: line.product.color } : {}), ...((line.kuchu ? itemCodeWithKuchu(line.product.itemCode, line.kuchu.id) : line.product.itemCode) ? { itemCode: line.kuchu ? itemCodeWithKuchu(line.product.itemCode, line.kuchu.id) : line.product.itemCode } : {}), ...(line.product.image ? { image: line.product.image } : {}), ...(line.kuchu ? { kuchuId: line.kuchu.id, kuchuName: line.kuchu.name, kuchuPrice: line.kuchu.price } : {}) }));
       const deliveryAddress: CustomerAddress = {
         ...address,
         country: address.country?.trim() || 'India',
@@ -1502,7 +1525,6 @@ export default function App() {
       setUtr('');
       setPaymentProof(null);
       setProofCheck(null);
-      setFinalSaleAccepted(false);
       setIsCheckoutOpen(false);
       setCheckoutStep(1);
       setCustomerTab('ORDERS');
@@ -1748,7 +1770,8 @@ export default function App() {
     ...products.map(product => product.category).filter(Boolean),
   ]));
 
-  const categoryTiles: CategoryTile[] = categoryOptions
+  const shopCategories = categoryOptions.filter(name => !/kuchu/i.test(name));
+  const categoryTiles: CategoryTile[] = shopCategories
     .map(name => {
       const inCategory = products.filter(product => product.category === name);
       return { name, count: inCategory.length, image: inCategory.find(product => product.image)?.image };
@@ -1876,9 +1899,8 @@ export default function App() {
       {/* BOUTIQUE BRANDING */}
       <div className="mr-announce">{tr('Where Tradition Meets Royalty')}</div>
       <SiteHeader
-        categories={categoryOptions}
-        activeCategory={categoryFilter}
-        onCategory={category => { setCustomerTab('SHOP'); withViewTransition(() => { setCategoryFilter(category); setWishOnly(false); }); if (category !== 'All') scrollToCatalog(); }}
+        links={[{ label: sitePages.about.title, onClick: () => setPageView('about') }, { label: sitePages.contact.title, onClick: () => setPageView('contact') }]}
+        onHome={() => { setCustomerTab('SHOP'); withViewTransition(() => { setCategoryFilter('All'); setWishOnly(false); setColorFilter(''); setSearchText(''); }); }}
         search={searchText}
         onSearch={value => { setCustomerTab('SHOP'); setSearchText(value); }}
         wishlistCount={wishlist.ids.length}
@@ -1889,7 +1911,7 @@ export default function App() {
         shopping={!isStaff}
         tr={tr}
       />
-      {!isStaff && customerTab === 'SHOP' && <HeroBanner tr={tr} onShop={category => { withViewTransition(() => { setCategoryFilter(categoryOptions.includes(category) ? category : 'All'); }); scrollToCatalog(); }} />}
+      {!isStaff && customerTab === 'SHOP' && <HeroBanner tr={tr} onShop={scrollToCatalog} />}
 
       {!isStaff && (
         <AIOfferBannerContainer
@@ -1915,8 +1937,10 @@ export default function App() {
           <div className="mr-tabs" role="tablist" aria-label="Developer views">
             <button type="button" role="tab" className="mr-tab" aria-selected={devView === 'HOME'} onClick={() => withViewTransition(() => setDevView('HOME'))}>🛠️ Developer Telemetry &amp; Host Access (Home)</button>
             <button type="button" role="tab" className="mr-tab" aria-selected={devView === 'HOST'} onClick={() => withViewTransition(() => setDevView('HOST'))}>🏪 Host Management Panel</button>
+            <button type="button" role="tab" className="mr-tab" aria-selected={devView === 'PAGES'} onClick={() => withViewTransition(() => setDevView('PAGES'))}>📝 Site Pages</button>
           </div>
         )}
+        {!firebaseLoading && role === 'DEVELOPER' && devView === 'PAGES' && <SitePagesEditor key={JSON.stringify(sitePages)} pages={sitePages} whatsapp={hostWhatsApp} onSave={handleSaveSitePages} />}
         {!firebaseLoading && role === 'DEVELOPER' && devView === 'HOME' && (
           <div style={{ backgroundColor: '#fff', padding: '1.8rem', borderRadius: '10px', boxShadow: '0 2px 10px rgba(0,0,0,0.08)', marginBottom: '2rem' }}>
             <h2 style={{ color: 'var(--mr-primary)', marginTop: 0 }}>🛠️ Developer Telemetry & Host Access</h2>
@@ -2016,7 +2040,7 @@ export default function App() {
               {lastPublished && (
                 <div role="status" style={{ marginBottom: '0.8rem', padding: '0.6rem 0.8rem', background: '#e8f5e9', border: '1px solid #a5d6a7', borderRadius: '8px', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
                   <span>Published <code>{lastPublished.itemCode}</code>{lastPublished.color ? ` (${lastPublished.color})` : ''}.</span>
-                  <button type="button" onClick={() => { setNewProduct({ name: lastPublished.name, category: lastPublished.category, price: String(lastPublished.price), offerPrice: lastPublished.offerPrice ? String(lastPublished.offerPrice) : '', quantity: '1', description: lastPublished.description, image: '', categoryCode: lastPublished.categoryCode || '', patternCode: lastPublished.patternCode || '', color: '', size: lastPublished.size || '', kuchuCode: lastPublished.kuchuCode || '', itemCode: '', compatibleKuchuIds: lastPublished.compatibleKuchuIds || [], threadColors: lastPublished.threadColors || [] }); setLastPublished(null); }} style={{ cursor: 'pointer', fontWeight: 'bold' }}>Add another colour of this design</button>
+                  <button type="button" onClick={() => { setNewProduct({ name: lastPublished.name, category: lastPublished.category, price: String(lastPublished.price), offerPrice: lastPublished.offerPrice ? String(lastPublished.offerPrice) : '', quantity: '1', description: lastPublished.description, image: '', categoryCode: lastPublished.categoryCode || '', patternCode: lastPublished.patternCode || '', color: '', size: lastPublished.size || '', kuchuCode: lastPublished.kuchuCode || '', itemCode: '', compatibleKuchuIds: lastPublished.compatibleKuchuIds || [] }); setLastPublished(null); }} style={{ cursor: 'pointer', fontWeight: 'bold' }}>Add another colour of this design</button>
                   <button type="button" onClick={() => setLastPublished(null)} style={{ cursor: 'pointer' }}>Dismiss</button>
                 </div>
               )}
@@ -2077,7 +2101,7 @@ export default function App() {
                   <small style={{ color: '#666' }}>Items with the same category code and pattern code are shown together as colours of one design.</small>
                 </div>
                 <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.6rem', padding: '0.8rem', background: 'var(--mr-tint)', border: '1px solid #eee', borderRadius: '8px' }}>
-                  <strong>Kuchu and thread colours (optional)</strong>
+                  <strong>Kuchu work (optional)</strong>
                   {kuchuList.length === 0
                     ? <small style={{ color: '#666' }}>Add Kuchu designs in the Upload Kuchu Section above to tag them on this saree.</small>
                     : (
@@ -2091,19 +2115,6 @@ export default function App() {
                         ))}
                       </div>
                     )}
-                  <div style={{ fontSize: '0.85rem' }}>Thread colours customers can choose (from this saree's colour combination):</div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                    {PALETTE.map(option => {
-                      const picked = newProduct.threadColors.includes(option.name);
-                      const suggested = colorSuggestions.some(item => item.code === option.code) || option.name === newProduct.color;
-                      return (
-                        <button key={option.code} type="button" aria-pressed={picked} onClick={() => setNewProduct({ ...newProduct, threadColors: picked ? newProduct.threadColors.filter(name => name !== option.name) : [...newProduct.threadColors, option.name] })} style={{ display: 'inline-flex', gap: '0.3rem', alignItems: 'center', padding: '0.2rem 0.55rem', borderRadius: '999px', border: picked ? '2px solid var(--mr-primary)' : suggested ? '1px dashed var(--mr-primary)' : '1px solid #ccc', background: picked ? 'var(--mr-tint-strong)' : '#fff', cursor: 'pointer', fontSize: '0.78rem' }}>
-                          <span aria-hidden="true" style={{ width: '12px', height: '12px', borderRadius: '50%', background: option.hex, border: '1px solid #999' }} />{option.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <small style={{ color: '#666' }}>Dashed colours were seen in your photo or are the saree colour. Tap the ones that go with this saree.</small>
                 </div>
                 <div style={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
                   <label style={mediaButtonStyle}>
@@ -2498,12 +2509,18 @@ export default function App() {
 
             {customerTab === 'SHOP' && (
               <>
-            <CategoryTiles tiles={categoryTiles} active={categoryFilter} onSelect={name => { withViewTransition(() => setCategoryFilter(categoryFilter === name ? 'All' : name)); scrollToCatalog(); }} tr={tr} />
+            {categoryTiles.length >= 2 && <CategoryTiles tiles={categoryTiles} active={categoryFilter} onSelect={name => { withViewTransition(() => setCategoryFilter(categoryFilter === name ? 'All' : name)); scrollToCatalog(); }} tr={tr} />}
             <ColorRow colors={colorTiles} active={colorFilter} onSelect={name => { withViewTransition(() => setColorFilter(name)); if (name) scrollToCatalog(); }} tr={tr} />
             <StoryShowcase products={products} onSelect={product => focusProduct(product.id)} />
 
             {/* Sticky filter bar */}
-            <div className="mr-filterbar" role="region" aria-label={tr('Filters')}>
+            {products.length > 0 && <div className="mr-filterbar" role="region" aria-label={tr('Filters')}>
+              {categoryTiles.length >= 2 && (
+                <select value={categoryFilter} onChange={event => withViewTransition(() => setCategoryFilter(event.target.value))} aria-label={tr('Category')} style={{ padding: '0.4rem 0.8rem', borderRadius: '999px', border: '1px solid var(--mr-line)', background: '#fff' }}>
+                  <option value="All">{tr('All categories')}</option>
+                  {categoryTiles.map(tile => <option key={tile.name} value={tile.name}>{tr(tile.name)}</option>)}
+                </select>
+              )}
               <button type="button" className="mr-chip" aria-pressed={onlyInStock} onClick={() => withViewTransition(() => setOnlyInStock(current => !current))}>{tr('In stock only')}</button>
               <button type="button" className="mr-chip" aria-pressed={onlyOffers} onClick={() => withViewTransition(() => setOnlyOffers(current => !current))}>{tr('On offer')}</button>
               <button type="button" className="mr-chip" aria-pressed={wishOnly} onClick={() => withViewTransition(() => setWishOnly(current => !current))}>♥ {tr('Saved')} ({wishlist.ids.length})</button>
@@ -2525,8 +2542,15 @@ export default function App() {
                 <button type="button" className="mr-chip" onClick={() => withViewTransition(() => { setCategoryFilter('All'); setOnlyInStock(false); setOnlyOffers(false); setWishOnly(false); setColorFilter(''); setSearchText(''); setSortBy('featured'); })}>{tr('Clear all')}</button>
               )}
               {cartCount > 0 && <button type="button" className="mr-btn" onClick={() => setIsCartOpen(true)} style={{ padding: '0.45rem 1.1rem', fontSize: '0.85rem' }}>{tr(cartCount === 1 ? 'View cart · {count} item · ₹{total}' : 'View cart · {count} items · ₹{total}', { count: cartCount, total: cartTotal })}</button>}
-            </div>
-            {filteredProducts.length === 0 && <p role="status" style={{ color: '#666' }}>{tr('No items match these filters.')}</p>}
+            </div>}
+            {filteredProducts.length === 0 && products.length === 0 && productsReady && (
+              <div role="status" className="mr-fade-up" style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--mr-primary)' }}>
+                <img src="./brand/icon-sarees.png" alt="" width="64" style={{ opacity: 0.9 }} />
+                <h2 style={{ margin: '0.6rem 0 0.2rem' }}>{tr('Our new collection is being prepared')}</h2>
+                <p style={{ margin: 0, color: '#555' }}>{tr('Please check back soon, or message us on WhatsApp.')}</p>
+              </div>
+            )}
+            {filteredProducts.length === 0 && products.length > 0 && <p role="status" style={{ color: '#666' }}>{tr('No items match these filters.')}</p>}
 
             {!productsReady && products.length === 0 && <ProductSkeletons />}
             {/* Catalog Grid */}
@@ -2566,7 +2590,7 @@ export default function App() {
                         <p style={{ margin: '0 0 0.2rem', fontSize: '0.78rem', color: 'var(--mr-primary)' }}>{product.color ? `${tr('Colour')}: ${product.color}` : ''}{product.size ? ` · ${product.size}` : ''}</p>
                       )}
                       <p style={{ fontSize: '0.85rem', color: '#666', lineHeight: '1.3' }}>{product.description}</p>
-                      <KuchuPicker product={product} kuchuList={kuchuList} selectedId={kuchuChoice[product.id] || ''} threadColor={threadChoice[product.id] || ''} onKuchu={id => setKuchuChoice(current => ({ ...current, [product.id]: id }))} onThread={color => setThreadChoice(current => ({ ...current, [product.id]: color }))} tr={tr} />
+                      <KuchuPicker product={product} kuchuList={kuchuList} selectedId={kuchuChoice[choiceKey(product)] || ''} onKuchu={id => setKuchuChoice(current => ({ ...current, [choiceKey(product)]: id }))} tr={tr} />
                       {typeof product.quantity === 'number' && product.quantity > 0 && product.quantity <= 3 && effectiveStatus(product) === 'AVAILABLE' && (
                         <p style={{ margin: '0.2rem 0', color: '#b45309', fontSize: '0.8rem', fontWeight: 'bold' }}>{tr('Only {count} left', { count: product.quantity })}</p>
                       )}
@@ -2589,13 +2613,13 @@ export default function App() {
                       {isPurchasable(product) ? (
                         <div style={{ display: 'flex', gap: '0.4rem' }}>
                           <button
-                            onClick={() => { const selection = selectionFor(product); if (selection === 'MISSING_THREAD') { alert(tr('Please choose a thread colour for your Kuchu.')); return; } addToCart(product, selection); trackAddToCart(product.id, product.category); }}
+                            onClick={() => { const selection = selectionFor(product); addToCart(product, selection); trackAddToCart(product.id, product.category); }}
                             style={{ backgroundColor: '#fff', color: 'var(--mr-primary)', border: '1px solid var(--mr-primary)', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                           >
                             {tr('+ Add')}
                           </button>
                           <button
-                            onClick={() => { const selection = selectionFor(product); if (selection === 'MISSING_THREAD') { alert(tr('Please choose a thread colour for your Kuchu.')); return; } buyNow(product, selection); }}
+                            onClick={() => { const selection = selectionFor(product); buyNow(product, selection); }}
                             style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                           >
                             {tr('Buy now')}
@@ -2633,7 +2657,7 @@ export default function App() {
                           <div key={lineKey(line)} style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', borderBottom: '1px solid #eee', paddingBottom: '0.9rem' }}>
                             <img src={line.product.image} alt="" style={{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: '6px', flex: '0 0 64px' }} />
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <strong>{line.product.name}</strong>{line.product.color && <span style={{ marginLeft: '0.4rem', fontSize: '0.78rem', color: 'var(--mr-primary)' }}>({line.product.color})</span>}{line.kuchu && <div style={{ fontSize: '0.78rem', color: '#555' }}>Kuchu: {line.kuchu.name} (+₹{line.kuchu.price}){line.threadColor ? ` · Thread: ${line.threadColor}` : ''}</div>}
+                              <strong>{line.product.name}</strong>{line.product.color && <span style={{ marginLeft: '0.4rem', fontSize: '0.78rem', color: 'var(--mr-primary)' }}>({line.product.color})</span>}{line.kuchu && <div style={{ fontSize: '0.78rem', color: '#555' }}>Kuchu: {line.kuchu.name} <code>{line.kuchu.id}</code> (+₹{line.kuchu.price})</div>}
                               <div style={{ fontSize: '0.85rem', color: '#666' }}>{tr('₹{price} each', { price: lineUnitPrice(line.product, line.kuchu) })}{typeof line.product.quantity === 'number' && line.product.quantity <= 5 ? ` · ${tr('only {count} left', { count: line.product.quantity })}` : ''}</div>
                               <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.4rem', marginTop: '0.4rem' }}>
                                 <button type="button" aria-label={`Decrease quantity of ${line.product.name}`} onClick={() => changeQuantity(lineKey(line), -1)} style={{ width: '30px', height: '30px', cursor: 'pointer' }}>−</button>
@@ -2792,18 +2816,9 @@ export default function App() {
                         </label>
                         <small style={{ color: '#666' }}>{tr('We use these only for your order and, if you ticked it, offers. You can ask us to stop at any time.')}</small>
                       </fieldset>
-                      {cartHasKuchu && (
-                        <label style={{ display: 'grid', gap: '0.4rem', margin: '0.6rem 0', padding: '0.7rem', background: '#fdecea', border: '1px solid #f5b5bd', borderRadius: '8px', fontSize: '0.88rem', cursor: 'pointer' }}>
-                          <strong style={{ color: '#8b1e2d' }}>{tr(FINAL_SALE_HEADLINE)}</strong>
-                          <span>{tr(FINAL_SALE_DETAIL)}</span>
-                          <span style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                            <input type="checkbox" checked={finalSaleAccepted} onChange={event => setFinalSaleAccepted(event.target.checked)} required />
-                            {tr('I understand and accept this final-sale rule.')}
-                          </span>
-                        </label>
-                      )}
                       <PaymentProofCapture file={paymentProof} onFile={setPaymentProof} utr={utr} onUtr={setUtr} expectedAmount={cartTotal} onCheck={setProofCheck} label={tr('Payment screenshot (PhonePe, GPay, Paytm or bank app)')} />
                       <button type="submit" disabled={firebaseLoading || uploadingProof} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}>{uploadingProof ? tr('Uploading screenshot...') : t.placeOrder}</button>
+                      {cartHasKuchu && <p style={{ margin: '0.5rem 0 0', fontSize: '0.72rem', color: '#6b7280', textAlign: 'center' }}>{tr(FINAL_SALE_HEADLINE)}</p>}
                     </form>
                   )}
                 </div>
@@ -2937,30 +2952,39 @@ export default function App() {
 
       </div>
 
+      {!isStaff && (
+        <SiteFooter pages={sitePages} whatsapp={hostWhatsApp} whatsappUrl={hostWhatsApp ? whatsAppLink(hostWhatsApp, 'Hello Mala Royale, I have a question.') : undefined} onOpen={setPageView} tr={tr} />
+      )}
+      {pageView && (
+        <SitePageView
+          page={sitePages[pageView]}
+          shop="Mala Royale"
+          whatsapp={hostWhatsApp}
+          whatsappUrl={pageView === 'contact' && hostWhatsApp ? whatsAppLink(hostWhatsApp, 'Hello Mala Royale, I have a question.') : undefined}
+          onClose={() => { setPageView(null); if (window.location.hash.startsWith('#page=')) window.history.replaceState(null, '', window.location.pathname + window.location.search); }}
+          tr={tr}
+        />
+      )}
       {viewProduct && (
         <ProductQuickView
           product={viewProduct}
           variants={viewVariants}
           related={viewRelated}
           kuchuList={kuchuList}
-          kuchuId={kuchuChoice[viewProduct.id] || ''}
-          thread={threadChoice[viewProduct.id] || ''}
+          kuchuId={kuchuChoice[choiceKey(viewProduct)] || ''}
           wished={wishlist.has(viewProduct.id)}
           badges={cardBadges(viewProduct)}
-          onKuchu={id => setKuchuChoice(current => ({ ...current, [viewProduct.id]: id }))}
-          onThread={color => setThreadChoice(current => ({ ...current, [viewProduct.id]: color }))}
+          onKuchu={id => setKuchuChoice(current => ({ ...current, [choiceKey(viewProduct)]: id }))}
           onVariant={id => setViewProductId(id)}
           onOpen={id => setViewProductId(id)}
           onAdd={() => {
             const selection = selectionFor(viewProduct);
-            if (selection === 'MISSING_THREAD') { alert(tr('Please choose a thread colour for your Kuchu.')); return false; }
             addToCart(viewProduct, selection);
             trackAddToCart(viewProduct.id, viewProduct.category);
             return true;
           }}
           onBuy={() => {
             const selection = selectionFor(viewProduct);
-            if (selection === 'MISSING_THREAD') { alert(tr('Please choose a thread colour for your Kuchu.')); return; }
             setViewProductId(null);
             buyNow(viewProduct, selection);
           }}

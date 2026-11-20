@@ -35,6 +35,9 @@ export function itemCodeWithKuchu(itemCode: string | undefined, kuchuId: string)
   return [...parts.slice(0, -1), kuchuId, parts[parts.length - 1]].join('-');
 }
 
+/** The Kuchu choice is kept per design, so it stays when the customer switches colour. */
+export const choiceKey = (product: { id: string; designKey?: string }): string => product.designKey || product.id;
+
 /** Cart lines are told apart by saree, Kuchu and thread colour, so the same saree can be in the cart twice. */
 export const lineKey = (line: { product: { id: string }; kuchu?: { id: string } | null; threadColor?: string }): string =>
   `${line.product.id}|${line.kuchu?.id || ''}|${line.threadColor || ''}`;

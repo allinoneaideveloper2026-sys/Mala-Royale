@@ -39,7 +39,7 @@ export type HostOrderTab = 'ACTIVE' | 'DISPATCHED' | 'HISTORY';
 export type HostTab = 'ORDERS' | 'LEDGER' | 'UPLOAD' | 'CATALOG' | 'QR' | 'ENQUIRIES' | 'FEEDBACK' | 'INSIGHTS';
 export type SortKey = 'featured' | 'newest' | 'price-asc' | 'price-desc' | 'discount' | 'in-stock';
 
-export const DEFAULT_CATEGORIES = ['Sarees', 'Custom Kuchu'];
+export const DEFAULT_CATEGORIES = ['Sarees'];
 export const NEW_CATEGORY_VALUE = '__new__';
 
 export type CartLine = { product: Product; quantity: number; kuchu?: KuchuDesign; threadColor?: string };

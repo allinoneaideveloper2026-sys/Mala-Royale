@@ -15,11 +15,9 @@ export default function ProductQuickView({
   related,
   kuchuList,
   kuchuId,
-  thread,
   wished,
   badges,
   onKuchu,
-  onThread,
   onVariant,
   onOpen,
   onAdd,
@@ -37,11 +35,9 @@ export default function ProductQuickView({
   related: Product[];
   kuchuList: KuchuDesign[];
   kuchuId: string;
-  thread: string;
   wished: boolean;
   badges: string[];
   onKuchu: (id: string) => void;
-  onThread: (color: string) => void;
   onVariant: (id: string) => void;
   onOpen: (id: string) => void;
   onAdd: () => boolean;
@@ -75,7 +71,7 @@ export default function ProductQuickView({
     return () => { document.body.style.overflow = previous; window.removeEventListener('keydown', onKey); };
   }, [onClose]);
 
-  useEffect(() => { setAdded(false); }, [product.id, kuchuId, thread]);
+  useEffect(() => { setAdded(false); }, [product.id, kuchuId]);
 
   useEffect(() => {
     setPinResult(null);
@@ -128,7 +124,7 @@ export default function ProductQuickView({
               </>
             )}
 
-            <KuchuPicker product={product} kuchuList={kuchuList} selectedId={kuchuId} threadColor={thread} onKuchu={onKuchu} onThread={onThread} tr={tr} />
+            <KuchuPicker product={product} kuchuList={kuchuList} selectedId={kuchuId} onKuchu={onKuchu} tr={tr} />
 
             <div className="mr-pdp-actions">
               <button type="button" className="mr-btn" disabled={!purchasable} onClick={add}>{added ? `✓ ${tr('Added to bag')}` : tr('Add to bag')}</button>

@@ -17,7 +17,7 @@ export default function ProductManagerRow({
   /** Used to stop two products sharing one item ID. */
   allProducts?: Product[];
   kuchuList?: KuchuDesign[];
-  onSave: (productId: string, changes: { name: string; category: string; price: number; offerPrice?: number; quantity: number; status: ProductStatus; itemCode?: string; color?: string; colorCode?: string; size?: string; categoryCode?: string; patternCode?: string; compatibleKuchuIds?: string[]; threadColors?: string[] }) => Promise<void>;
+  onSave: (productId: string, changes: { name: string; category: string; price: number; offerPrice?: number; quantity: number; status: ProductStatus; itemCode?: string; color?: string; colorCode?: string; size?: string; categoryCode?: string; patternCode?: string; compatibleKuchuIds?: string[] }) => Promise<void>;
   onDelete: (product: Product) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -33,7 +33,6 @@ export default function ProductManagerRow({
   const [categoryCode, setCategoryCode] = useState(product.categoryCode || '');
   const [patternCode, setPatternCode] = useState(product.patternCode || '');
   const [kuchuIds, setKuchuIds] = useState<string[]>(product.compatibleKuchuIds || []);
-  const [threadColors, setThreadColors] = useState<string[]>(product.threadColors || []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const shownStatus = effectiveStatus(product);
@@ -51,7 +50,6 @@ export default function ProductManagerRow({
     setCategoryCode(product.categoryCode || '');
     setPatternCode(product.patternCode || '');
     setKuchuIds(product.compatibleKuchuIds || []);
-    setThreadColors(product.threadColors || []);
     setError('');
     setEditing(true);
   };
@@ -89,7 +87,7 @@ export default function ProductManagerRow({
     setBusy(true);
     setError('');
     try {
-      await onSave(product.id, { name: name.trim(), category, price: nextPrice, offerPrice: nextOffer, quantity: nextQuantity, status, ...(nextCode ? { itemCode: nextCode } : {}), color: color.trim(), colorCode: color.trim() ? colorCodeFor(color) : '', size: size.trim(), categoryCode: categoryCode.trim().toUpperCase(), patternCode: patternCode.trim().toUpperCase(), compatibleKuchuIds: kuchuIds, threadColors });
+      await onSave(product.id, { name: name.trim(), category, price: nextPrice, offerPrice: nextOffer, quantity: nextQuantity, status, ...(nextCode ? { itemCode: nextCode } : {}), color: color.trim(), colorCode: color.trim() ? colorCodeFor(color) : '', size: size.trim(), categoryCode: categoryCode.trim().toUpperCase(), patternCode: patternCode.trim().toUpperCase(), compatibleKuchuIds: kuchuIds });
       setEditing(false);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Could not save the changes.');
@@ -171,17 +169,6 @@ export default function ProductManagerRow({
                 ))}
               </div>
             )}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-              <strong>Thread colours:</strong>
-              {PALETTE.map(option => {
-                const picked = threadColors.includes(option.name);
-                return (
-                  <button key={option.code} type="button" aria-pressed={picked} onClick={() => setThreadColors(picked ? threadColors.filter(name => name !== option.name) : [...threadColors, option.name])} style={{ display: 'inline-flex', gap: '0.25rem', alignItems: 'center', padding: '0.15rem 0.5rem', borderRadius: '999px', border: picked ? '2px solid var(--mr-primary)' : '1px solid #ccc', background: picked ? 'var(--mr-tint-strong)' : '#fff', cursor: 'pointer', fontSize: '0.75rem' }}>
-                    <span aria-hidden="true" style={{ width: '10px', height: '10px', borderRadius: '50%', background: option.hex, border: '1px solid #999' }} />{option.name}
-                  </button>
-                );
-              })}
-            </div>
           </div>
           <button type="submit" disabled={busy} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 0, borderRadius: '4px', padding: '0.5rem 0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>{busy ? 'Saving...' : 'Save changes'}</button>
         </form>
