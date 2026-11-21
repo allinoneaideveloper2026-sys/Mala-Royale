@@ -418,3 +418,123 @@ describe('Kuchu choice stays when the colour changes', () => {
     expect(choiceKey({ id: 'p3' })).toBe('p3');
   });
 });
+
+import { applyPriceFilter, buildMessages, chunkPages, cosine, deliveryFacts, fallbackAnswer, findColors, hybridRank, isAvailable, lexicalScore, maskPersonalData, parsePriceFilter, routeIntent, sanitizeHistory, type CatalogItem } from '../src/domain/assistant';
+
+const item = (over: Partial<CatalogItem>): CatalogItem => ({ id: 'p', name: 'Saree', category: 'Sarees', description: '', price: 4000, kuchuNames: [], ...over });
+
+describe('smart search ranking', () => {
+  it('computes cosine similarity', () => {
+    expect(Math.round(cosine([1, 0], [1, 0]) * 100)).toBe(100);
+    expect(cosine([1, 0], [0, 1])).toBe(0);
+    expect(cosine([0, 0], [1, 1])).toBe(0);
+  });
+  it('matches words in names and colours first', () => {
+    const maroon = item({ id: 'a', name: 'Maroon Zari Silk Saree', color: 'Maroon' });
+    const blue = item({ id: 'b', name: 'Blue Cotton Saree', color: 'Blue' });
+    expect(lexicalScore('maroon silk', maroon)).toBeGreaterThan(lexicalScore('maroon silk', blue));
+  });
+  it('mixes meaning and words, and drops weak matches', () => {
+    const items = [item({ id: 'a', name: 'Maroon Silk' }), item({ id: 'b', name: 'Green Cotton' })];
+    const ranked = hybridRank('maroon silk saree', items, [0.8, 0.35]);
+    expect(ranked[0].item.id).toBe('a');
+    expect(ranked.some(entry => entry.item.id === 'b')).toBe(false);
+  });
+  it('works with words only when the AI is not available', () => {
+    const ranked = hybridRank('maroon', [item({ id: 'a', name: 'Maroon Silk' }), item({ id: 'b', name: 'Blue' })], []);
+    expect(ranked.map(entry => entry.item.id)).toEqual(['a']);
+  });
+});
+
+describe('understanding the question', () => {
+  it('reads price limits', () => {
+    expect(parsePriceFilter('maroon sarees under 5000')).toEqual({ max: 5000 });
+    expect(parsePriceFilter('below ₹4k')).toEqual({ max: 4000 });
+    expect(parsePriceFilter('above 3,000')).toEqual({ min: 3000 });
+    expect(parsePriceFilter('between 3000 and 6000')).toEqual({ min: 3000, max: 6000 });
+    expect(parsePriceFilter('hello')).toEqual({});
+  });
+  it('filters by price after offers', () => {
+    const items = [item({ id: 'a', price: 6000, offerPrice: 4500 }), item({ id: 'b', price: 7000 })];
+    expect(applyPriceFilter(items, { max: 5000 }).map(entry => entry.id)).toEqual(['a']);
+  });
+  it('finds colours and routes the question', () => {
+    expect(findColors('a maroon and gold saree')).toEqual(['Maroon', 'Gold']);
+    expect(routeIntent('what is your return policy').policy).toBe(true);
+    expect(routeIntent('courier charge to 560001').pincode).toBe('560001');
+    expect(routeIntent('show me maroon silk sarees').products).toBe(true);
+    expect(routeIntent('can I return it?').products).toBe(false);
+  });
+  it('knows what is on sale', () => {
+    expect(isAvailable(item({ quantity: 0 }))).toBe(false);
+    expect(isAvailable(item({ status: 'OUT_OF_STOCK' }))).toBe(false);
+    expect(isAvailable(item({ quantity: 3 }))).toBe(true);
+  });
+});
+
+describe('assistant safety and answers', () => {
+  it('hides phone numbers and emails but keeps pincodes', () => {
+    expect(maskPersonalData('call 98765 43210 or a@b.com pin 580020')).toBe('call [number] or [email] pin 580020');
+  });
+  it('keeps only recent, clean history', () => {
+    const history = sanitizeHistory([{ role: 'user', content: 'x' }, { role: 'system', content: 'bad' }, ...Array.from({ length: 10 }, (_, index) => ({ role: 'assistant', content: `m${index}` }))]);
+    expect(history.length).toBe(6);
+    expect(history.every(turn => turn.role === 'assistant')).toBe(true);
+  });
+  it('splits pages into chunks at headings', () => {
+    const chunks = chunkPages({ terms: { title: 'Terms', body: '## Orders\nOne\n\n## Returns\nNo returns' } });
+    expect(chunks.map(chunk => chunk.heading)).toEqual(['Orders', 'Returns']);
+  });
+  it('answers delivery from the real courier rules', () => {
+    const text = deliveryFacts('560001', { ruleAEnabled: true, ruleBEnabled: true, bangalorePrefixes: ['560'] });
+    expect(text.includes('Bangalore')).toBe(true);
+  });
+  it('builds a prompt with only the facts it was given and a plain fallback answer', () => {
+    const context = { products: [item({ id: 'a', name: 'Maroon Silk', price: 4000, color: 'Maroon' })], policies: [], delivery: '' };
+    const messages = buildMessages('maroon saree', [], context, '+91 90000 00000');
+    expect(messages[0].content.includes('Maroon Silk')).toBe(true);
+    expect(messages[0].content.includes('Never invent')).toBe(true);
+    expect(fallbackAnswer(context, '').includes('Maroon Silk')).toBe(true);
+    expect(fallbackAnswer({ products: [], policies: [], delivery: '' }, '').includes('could not find')).toBe(true);
+  });
+});
+
+import { cleanEvents, popularIds, summarize, viewedButNotAdded } from '../src/domain/signals';
+
+describe('shopper signals', () => {
+  it('keeps only well-formed events and masks personal data', () => {
+    const events = cleanEvents([
+      { k: 'view', id: 'p1' },
+      { k: 'view', id: '<script>' },
+      { k: 'search', q: '  Maroon   Silk 98765 43210 ', n: 3 },
+      { k: 'bogus', q: 'x' },
+      { k: 'ask', q: 'return policy?', n: 0, f: 1 },
+      'junk',
+    ]);
+    expect(events.length).toBe(3);
+    expect(events[1].q).toBe('maroon silk [number]');
+    expect(events[2].f).toBe(1);
+  });
+  it('limits the size of a batch', () => {
+    expect(cleanEvents(Array.from({ length: 100 }, () => ({ k: 'view', id: 'p1' }))).length).toBe(40);
+  });
+  it('counts searches, no-result searches, questions and product activity', () => {
+    const summary = summarize([
+      { day: 'd', events: [{ k: 'search', q: 'maroon', n: 2 }, { k: 'search', q: 'green kuchu', n: 0 }, { k: 'view', id: 'a' }, { k: 'cart', id: 'a' }] },
+      { day: 'd', events: [{ k: 'search', q: 'maroon', n: 2 }, { k: 'search', q: 'green kuchu', n: 0 }, { k: 'ask', q: 'do you do blouses', n: 0, f: 1 }, { k: 'view', id: 'b' }] },
+    ]);
+    expect(summary.topSearches[0]).toEqual({ q: 'green kuchu', count: 2 });
+    expect(summary.noResultSearches).toEqual([{ q: 'green kuchu', count: 2 }]);
+    expect(summary.unansweredQuestions[0].q).toBe('do you do blouses');
+    expect(summary.products.find(product => product.id === 'a')?.carts).toBe(1);
+  });
+  it('ranks popular items by sales first and skips unavailable ones', () => {
+    const summary = summarize([{ day: 'd', events: [{ k: 'view', id: 'a' }, { k: 'view', id: 'a' }, { k: 'cart', id: 'b' }, { k: 'view', id: 'c' }] }]);
+    const ids = popularIds(summary, new Map([['c', 2]]), id => id !== 'b');
+    expect(ids).toEqual(['c', 'a']);
+  });
+  it('finds items that are viewed a lot but never added', () => {
+    const summary = summarize([{ day: 'd', events: Array.from({ length: 12 }, () => ({ k: 'view' as const, id: 'a' })) }]);
+    expect(viewedButNotAdded(summary)[0].id).toBe('a');
+  });
+});

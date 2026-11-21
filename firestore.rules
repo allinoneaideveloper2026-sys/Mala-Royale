@@ -214,6 +214,18 @@ service cloud.firestore {
       allow delete: if isDeveloper();
     }
 
+    // Anonymous shopper signals (searches, views, bag adds), written by the Worker in batches. Only staff can read them.
+    match /signals/{signalId} {
+      allow create: if hasSession()
+        && request.resource.data.keys().hasOnly(['day', 'sid', 'events', 'at'])
+        && request.resource.data.day is string && request.resource.data.day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.sid is string && request.resource.data.sid.size() <= 32
+        && request.resource.data.events is list && request.resource.data.events.size() <= 40;
+      allow read: if isStaff();
+      allow update: if false;
+      allow delete: if isDeveloper();
+    }
+
     // One record per order and message type, so a customer is never sent the same message twice.
     // The Worker creates it with the caller's own token, so these rules apply.
     match /notificationLog/{entryId} {

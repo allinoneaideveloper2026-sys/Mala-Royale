@@ -19,6 +19,8 @@
     // Notifications are OFF until you change these (see DEPLOY_CLOUDFLARE.md). Email: "gmail" or "resend". WhatsApp: "cloud".
     "EMAIL_PROVIDER": "off",
     "WHATSAPP_PROVIDER": "off",
-    "PUSH_PROVIDER": "off"
+    "PUSH_PROVIDER": "off",
+    // Smart search and the shopping assistant. Set ASSISTANT_ENABLED to "false" to switch both off.
+    "ASSISTANT_ENABLED": "true"
   }
 }

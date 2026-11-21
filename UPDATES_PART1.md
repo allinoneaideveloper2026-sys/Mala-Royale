@@ -65,3 +65,13 @@ Still to come: item IDs and colour variants, partial item rejection, Kuchu catal
 - The final-sale line is shown only at the bottom of checkout, in small text, when the bag has a Kuchu.
 - About us, Contact and Terms & Conditions pages with a footer. The developer edits them in the new "Site Pages" tab. Publish the new firestore.rules.
 - A friendly "collection is being prepared" message when the catalog is empty.
+
+## Phase 2: smart search and shopping assistant
+- Smart search (meaning + words) with automatic fallback to normal search.
+- "Ask Mala" assistant: answers from the catalog, Kuchu list, About/Contact/Terms and courier rules. Read-only; masks phone numbers and emails; rate limited; plain-answer fallback.
+- See DEPLOY_CLOUDFLARE.md for switches and limits.
+
+## Phase 3: recommendations, learning loop, host assistant
+- More like this (meaning-based), Recently viewed, Popular right now.
+- Anonymous shopper signals (opt-out in the footer) and a Shopper signals panel in Host Insights.
+- Host assistant drafts: description from photo, WhatsApp reply drafts.

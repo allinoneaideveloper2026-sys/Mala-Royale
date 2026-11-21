@@ -68,3 +68,21 @@ each with three text values: {{1}} customer name, {{2}} order number, {{3}} stat
 Push notifications are not built yet; `PUSH_PROVIDER` is only a placeholder switch.
 
 Secrets (keys, tokens) are never put in the website code or in `wrangler.jsonc`; only in Cloudflare's Variables and secrets.
+
+## Smart search and the shopping assistant ("Ask Mala")
+Both run in the Worker on Cloudflare's free Workers AI allowance (shared with the screenshot reader). They need no keys.
+
+- **What they read:** your public catalog, Kuchu list, About / Contact / Terms pages and courier rules (cached for 10 minutes), and only that.
+- **What they can do:** find sarees by meaning, colour and price ("maroon silk under 5000"), explain delivery and policies, and answer from your own pages. They **cannot** place orders, change anything or see orders and customer details.
+- **Privacy:** phone numbers and emails typed into the chat are masked before they reach the AI. Payment screenshots never go to it.
+- **Safety nets:** each visitor is limited per minute and per hour, and a daily cap applies. If the AI is off, busy or fails, search falls back to normal word search and the assistant shows a plain answer or matching items.
+- **Switch off:** set `"ASSISTANT_ENABLED": "false"` in `wrangler.jsonc` and push.
+- **Models** (optional, in `wrangler.jsonc` vars): `AI_CHAT_MODEL` (default `@cf/meta/llama-3.1-8b-instruct`) and `AI_EMBED_MODEL` (default `@cf/baai/bge-base-en-v1.5`, English only).
+- **If search never turns "smart":** the Worker reads Firestore without a login. If your project refuses that, add your Firebase web API key as the var `FIREBASE_API_KEY` in `wrangler.jsonc`.
+
+## Recommendations, shopper signals and the host assistant (Phase 3)
+- **More like this / Recently viewed / Popular right now.** "More like this" on a product uses the server's meaning search (falls back to the same category). "Recently viewed" lives only in the shopper's browser. "Popular right now" shows a list you publish.
+- **Anonymous shopper signals.** The website sends small batches (searches, product views, bag adds, saves, assistant questions; no names, phone numbers or accounts, personal data masked) to `/api/signals`. The Worker stores them in the Firestore collection `signals` using an anonymous sign-in. **To switch this on, set `FIREBASE_API_KEY` in `wrangler.jsonc` to your Firebase web API key (it is public) and make sure Authentication -> Sign-in method -> Anonymous is enabled.** Without the key nothing is stored and everything else still works. Shoppers can turn statistics off in the footer; the Terms page mentions it.
+- **Host panel.** Host -> Insights now has "Shopper signals": top searches, searches with no results, questions the assistant could not answer, items viewed a lot but rarely added, and a "Publish this list" button for "Popular right now".
+- **Host assistant (drafts only).** In Upload item, "Suggest description from the photo" drafts a description and suggests colours (needs the AI licence step from earlier). In Enquiries, "Draft reply" writes a WhatsApp reply you edit and send yourself. Staff only; nothing is sent automatically.
+- **Cleaning up.** Signals are one small document per batch. The developer can delete old ones in the Firebase console (collection `signals`). Publish the new `firestore.rules`.

@@ -5,16 +5,23 @@ import { isNotifyEvent } from '../src/domain/notifications';
 import type { Order } from '../src/domain/types';
 import { createDocument, getDocument } from './firestoreRest';
 import { sendNotifications, type NotifyEnv } from './notificationService';
+import { handleAssistant, handleSearch, handleSimilar } from './assistant';
+import { handleSignals } from './signals';
+import { handleHostAssist } from './hostAssist';
+import { VISION_MODEL } from './models';
 
 interface Env extends NotifyEnv {
-  AI: { run: (model: string, input: unknown) => Promise<{ response?: unknown }> };
+  AI: { run: (model: string, input: unknown) => Promise<{ response?: unknown; data?: number[][] }> };
+  AI_CHAT_MODEL?: string;
+  AI_EMBED_MODEL?: string;
+  ASSISTANT_ENABLED?: string;
+  FIREBASE_API_KEY?: string;
   ASSETS: { fetch: (request: Request) => Promise<Response> };
   FIREBASE_PROJECT_ID: string;
   DEVELOPER_EMAILS: string;
   OWNER_EMAILS?: string;
 }
 
-const VISION_MODEL = '@cf/meta/llama-3.2-11b-vision-instruct';
 const MAX_IMAGE_CHARS = 2_500_000; // about 1.8 MB of image data
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
@@ -181,11 +188,21 @@ export default {
 
     if (url.pathname === '/api/health') return json({ ok: true });
 
+    // Public, read-only helpers for shoppers (no sign-in needed). They are rate-limited and fall back to normal search on the site.
+    if (url.pathname === '/api/search' && request.method === 'POST') return handleSearch(request, env);
+    if (url.pathname === '/api/assistant' && request.method === 'POST') return handleAssistant(request, env);
+    if (url.pathname === '/api/similar' && request.method === 'POST') return handleSimilar(request, env);
+    if (url.pathname === '/api/signals' && request.method === 'POST') return handleSignals(request, env);
+
     const claims = await verifyFirebaseToken(request, env.FIREBASE_PROJECT_ID);
     if (!claims) return json({ ok: false, error: 'Please sign in again.' }, 401);
 
     if (url.pathname === '/api/read-proof' && request.method === 'POST') return readProof(request, env, claims.sub);
     if (url.pathname === '/api/notify' && request.method === 'POST') return notify(request, env, claims);
+    if (url.pathname === '/api/host-assist' && request.method === 'POST') {
+      if (!(await isStaffMember(claims, env))) return json({ ok: false, error: 'Staff only.' }, 403);
+      return handleHostAssist(request, env, claims.sub);
+    }
 
     if (url.pathname === '/api/ai-license') {
       const developers = (env.DEVELOPER_EMAILS || '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean);

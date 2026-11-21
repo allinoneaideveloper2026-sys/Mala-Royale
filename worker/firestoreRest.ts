@@ -45,3 +45,53 @@ export async function createDocument(projectId: string, collection: string, docu
   if (!response.ok) throw new Error(`Could not record the notification (${response.status}).`);
   return true;
 }
+
+/** Lists the documents of a collection that the security rules make public (no sign-in needed). */
+export async function listPublicDocuments(projectId: string, collection: string, apiKey?: string): Promise<Array<{ id: string; data: Record<string, unknown> }>> {
+  const result: Array<{ id: string; data: Record<string, unknown> }> = [];
+  let pageToken = '';
+  for (let page = 0; page < 5; page += 1) {
+    const url = `${base(projectId)}/${collection}?pageSize=200${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}${apiKey ? `&key=${apiKey}` : ''}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Could not list ${collection} (${response.status}).`);
+    const body = await response.json() as { documents?: Array<{ name: string; fields?: Record<string, FireValue> }>; nextPageToken?: string };
+    for (const doc of body.documents || []) result.push({ id: doc.name.split('/').pop() as string, data: decodeFields(doc.fields || {}) });
+    if (!body.nextPageToken) break;
+    pageToken = body.nextPageToken;
+  }
+  return result;
+}
+
+export async function getPublicDocument(projectId: string, path: string, apiKey?: string): Promise<Record<string, unknown> | null> {
+  const response = await fetch(`${base(projectId)}/${path}${apiKey ? `?key=${apiKey}` : ''}`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Could not read ${path} (${response.status}).`);
+  const body = await response.json() as { fields?: Record<string, FireValue> };
+  return decodeFields(body.fields || {});
+}
+
+/** Turns plain values into Firestore's REST format (strings, whole numbers, decimals, booleans, lists and maps). */
+export function encodeValue(value: unknown): FireValue {
+  if (typeof value === 'string') return { stringValue: value };
+  if (typeof value === 'boolean') return { booleanValue: value };
+  if (typeof value === 'number') return Number.isInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(encodeValue) } };
+  if (value && typeof value === 'object') {
+    const fields: Record<string, FireValue> = {};
+    for (const [key, inner] of Object.entries(value as Record<string, unknown>)) if (inner !== undefined) fields[key] = encodeValue(inner);
+    return { mapValue: { fields } };
+  }
+  return { nullValue: null };
+}
+
+/** Adds a document with an automatic id using the given sign-in token. */
+export async function addDocument(projectId: string, collection: string, data: Record<string, unknown>, token: string): Promise<void> {
+  const fields: Record<string, FireValue> = {};
+  for (const [key, value] of Object.entries(data)) fields[key] = encodeValue(value);
+  const response = await fetch(`${base(projectId)}/${collection}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields }),
+  });
+  if (!response.ok) throw new Error(`Could not save to ${collection} (${response.status}).`);
+}
