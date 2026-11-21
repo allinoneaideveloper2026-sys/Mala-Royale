@@ -3,12 +3,16 @@ import type { SitePageKey, SitePages } from '../../domain/sitePages';
 
 /** Footer: help block, page links and the brand line (same layout idea as the reference store). */
 export default function SiteFooter({
+  statsOn,
+  onStats,
   pages,
   whatsapp,
   whatsappUrl,
   onOpen,
   tr,
 }: {
+  statsOn: boolean;
+  onStats: (on: boolean) => void;
   pages: SitePages;
   whatsapp: string;
   whatsappUrl?: string;
@@ -43,6 +47,10 @@ export default function SiteFooter({
       </div>
       <div style={{ borderTop: '1px solid rgba(217,189,131,0.25)', padding: '0.9rem 1rem', textAlign: 'center', fontSize: '0.8rem', opacity: 0.8 }}>
         © {new Date().getFullYear()} Mala Royale
+        <div style={{ marginTop: '0.4rem' }}>
+          {tr('Anonymous visit statistics')}: <strong>{statsOn ? tr('On') : tr('Off')}</strong>{' '}
+          <button type="button" onClick={() => onStats(!statsOn)} style={{ background: 'none', border: 0, color: 'var(--mr-gold)', cursor: 'pointer', textDecoration: 'underline', font: 'inherit' }}>{statsOn ? tr('Turn off') : tr('Turn on')}</button>
+        </div>
       </div>
     </footer>
   );

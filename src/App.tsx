@@ -16,6 +16,13 @@ import SitePageView from './components/storefront/SitePageView';
 import SitePagesEditor from './components/host/SitePagesEditor';
 import { DEFAULT_PAGES, fillTokens, type SitePageKey, type SitePages } from './domain/sitePages';
 import { useWishlist } from './app/wishlist';
+import { useSmartSearch } from './app/smartSearch';
+import { recordSignal, setStatsEnabled, statsEnabled } from './app/signals';
+import { useRecentlyViewed } from './app/recentlyViewed';
+import { useSimilar } from './app/similar';
+import { draftReply, suggestDescription } from './app/hostAssist';
+import ProductRail from './components/storefront/ProductRail';
+import AssistantWidget from './components/storefront/AssistantWidget';
 import { withViewTransition } from './app/transitions';
 import { cardBadges, discountPercent, type OfferAction } from './components/AIOfferBanner/offerEngine';
 import { useBrowsingContext } from './components/AIOfferBanner/useBrowsingContext';
@@ -39,7 +46,7 @@ import { withTimeout, getOrderStatus, getOrderStatusStyle, newestFirst } from '.
 import { validateRefundDetails } from './domain/refund';
 import UpiPayBox from './components/checkout/UpiPayBox';
 import ConfirmDialog, { type DialogResult, type DialogReason } from './components/host/ConfirmDialog';
-import { saveSitePages, subscribeSitePages, deleteKuchu, publishKuchu, refreshKuchuFresh, rejectCloudOrderItem, subscribeKuchu, updateKuchu } from './domain/firestoreStore';
+import { savePopular, subscribePopular, saveSitePages, subscribeSitePages, deleteKuchu, publishKuchu, refreshKuchuFresh, rejectCloudOrderItem, subscribeKuchu, updateKuchu } from './domain/firestoreStore';
 import KuchuManager from './components/host/KuchuManager';
 import { FINAL_SALE_HEADLINE, choiceKey, compatibleKuchu, itemCodeWithKuchu, lineKey, lineUnitPrice, lineRegularPrice } from './domain/kuchu';
 import { deleteHostRecord, deleteOrderForever, getMyHostRecord, logAudit, restoreOrder, saveHostRecord, setHostActive, softDeleteOrder, subscribeAuditLog, subscribeHostRecords, validateHostRecord } from './domain/adminStore';
@@ -56,6 +63,7 @@ import { validateProductMedia, ProductGallery } from './components/storefront/Pr
 
 // Heavy, staff-only or rarely used screens are loaded on demand so the customer storefront bundle stays small.
 const HostAnalytics = lazy(() => import('./components/host/HostAnalytics'));
+const ShopperSignals = lazy(() => import('./components/host/ShopperSignals'));
 const MasterLedger = lazy(() => import('./components/host/MasterLedger'));
 const FeedbackPanel = lazy(() => import('./components/host/FeedbackPanel'));
 const HostOrderActions = lazy(() => import('./components/host/HostOrderActions'));
@@ -122,6 +130,12 @@ export default function App() {
   const [pageView, setPageView] = useState<SitePageKey | null>(null);
   const [productsReady, setProductsReady] = useState(!firebaseConfigured);
   const wishlist = useWishlist();
+  const recent = useRecentlyViewed();
+  const [popularList, setPopularList] = useState<string[]>([]);
+  const [statsOn, setStatsOn] = useState(statsEnabled());
+  const [descriptionBusy, setDescriptionBusy] = useState(false);
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [replyBusy, setReplyBusy] = useState('');
   const [kuchuList, setKuchuList] = useState<KuchuDesign[]>([]);
   const [kuchuChoice, setKuchuChoice] = useState<Record<string, string>>({});
   const [colorSuggestions, setColorSuggestions] = useState<PaletteColor[]>([]);
@@ -205,6 +219,8 @@ export default function App() {
     document.documentElement.lang = lang;
   }, [lang]);
   const isStaff = role === 'OWNER' || role === 'DEVELOPER';
+  const smartSearch = useSmartSearch(searchText, !isStaff);
+  const similarIds = useSimilar(viewProductId);
   const googleUser = firebaseUser && !firebaseUser.isAnonymous ? firebaseUser : null;
   const [logoFailed, setLogoFailed] = useState(false);
 
@@ -381,6 +397,12 @@ export default function App() {
     return () => window.removeEventListener('hashchange', open);
   }, []);
 
+  // "Popular right now": the host publishes it; customers read it (cached).
+  useEffect(() => {
+    if (!firebaseConfigured) return;
+    return subscribePopular(setPopularList, () => undefined, { live: isStaff });
+  }, [isStaff]);
+
   // Kuchu designs: customers read them (cached); staff see changes live.
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -537,6 +559,16 @@ export default function App() {
   const closeAcceptDialog = (result: DialogResult | null) => {
     acceptDialog?.resolve(result);
     setAcceptDialog(null);
+  };
+
+  // Anonymous shopper statistics (shoppers only) and the "recently viewed" list.
+  const trackCartAndSignal = (productId: string, category?: string) => {
+    trackAddToCart(productId, category);
+    if (!isStaff) recordSignal({ k: 'cart', id: productId });
+  };
+  const toggleWish = (productId: string) => {
+    if (!wishlist.has(productId) && !isStaff) recordSignal({ k: 'wish', id: productId });
+    wishlist.toggle(productId);
   };
 
   // Tells the customer about an order event (email / WhatsApp), only where they agreed and the shop has switched it on.
@@ -1140,6 +1172,43 @@ export default function App() {
       audit('SITE_PAGES_EDITED', 'settings', 'pages', 'Edited the About, Contact or Terms pages');
     }
     setSitePages(pages);
+  };
+
+  const handlePublishPopular = async (ids: string[]) => {
+    if (!(await askAccept('Publish "Popular right now"?', `${ids.length} item(s) will show in a "Popular right now" row on the shop home page.`, 'Publish'))) return;
+    if (firebaseConfigured) {
+      await withTimeout(savePopular(ids), 30000, 'Saving is taking too long. Check your internet connection and try again.');
+      audit('POPULAR_PUBLISHED', 'settings', 'popular', `Published ${ids.length} popular items`);
+    }
+    setPopularList(ids);
+  };
+
+  // A draft description (and colours) from the first photo. The host reads and edits it.
+  const handleSuggestDescription = async () => {
+    setDescriptionBusy(true);
+    try {
+      const photo = productMediaFiles.find(file => file.type.startsWith('image/')) || null;
+      const result = await suggestDescription(photo, { name: newProduct.name, category: newProduct.category, color: newProduct.color, size: newProduct.size });
+      setNewProduct(current => ({ ...current, description: result.description, color: current.color || result.colors[0] || '' }));
+      if (result.source === 'fallback') alert('The AI could not look at the photo, so this is a simple draft. Please edit it.');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not get a suggestion.');
+    } finally {
+      setDescriptionBusy(false);
+    }
+  };
+
+  // A draft WhatsApp reply to an enquiry. Nothing is sent: the host edits it and opens WhatsApp.
+  const handleDraftReply = async (enquiry: Enquiry) => {
+    setReplyBusy(enquiry.id);
+    try {
+      const result = await draftReply({ message: enquiry.message, kind: enquiry.kind, issueType: enquiry.issueType, orderId: enquiry.orderId });
+      setReplyDrafts(current => ({ ...current, [enquiry.id]: result.reply }));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not draft a reply.');
+    } finally {
+      setReplyBusy('');
+    }
   };
 
   const handleSaveShipping = async () => {
@@ -1791,10 +1860,18 @@ export default function App() {
     let list = categoryFilter === 'All' ? products : products.filter(product => product.category === categoryFilter);
     const tokens = searchText.toLowerCase().split(/\s+/).filter(Boolean);
     if (tokens.length > 0) {
-      list = list.filter(product => {
+      const localMatches = list.filter(product => {
         const haystack = `${product.name} ${product.category} ${product.color || ''} ${product.description || ''} ${product.itemCode || ''} ${product.size || ''}`.toLowerCase();
         return tokens.every(token => haystack.includes(token));
       });
+      if (smartSearch.ids && smartSearch.ids.length > 0) {
+        // Smart results first (best match first), then any exact word matches the smart search did not return.
+        const rank = new Map(smartSearch.ids.map((id, position) => [id, position] as [string, number]));
+        const smartMatches = list.filter(product => rank.has(product.id)).sort((left, right) => (rank.get(left.id) as number) - (rank.get(right.id) as number));
+        list = [...smartMatches, ...localMatches.filter(product => !rank.has(product.id))];
+      } else {
+        list = localMatches;
+      }
     }
     if (colorFilter) list = list.filter(product => product.color === colorFilter);
     if (wishOnly) list = list.filter(product => wishlist.has(product.id));
@@ -1819,9 +1896,30 @@ export default function App() {
 
   const viewProduct = viewProductId ? products.find(product => product.id === viewProductId) : undefined;
   const viewVariants = viewProduct ? (viewProduct.designKey ? products.filter(product => product.designKey === viewProduct.designKey) : [viewProduct]) : [];
-  const viewRelated = viewProduct
+  const viewRelatedByCategory = viewProduct
     ? products.filter(product => product.id !== viewProduct.id && product.category === viewProduct.category && (!viewProduct.designKey || product.designKey !== viewProduct.designKey) && isPurchasable(product)).slice(0, 8)
     : [];
+  // "More like this" prefers the server's meaning-based picks and falls back to the same category.
+  const viewRelated = viewProduct && similarIds
+    ? similarIds.map(id => products.find(product => product.id === id)).filter((product): product is Product => Boolean(product) && isPurchasable(product as Product)).slice(0, 8)
+    : viewRelatedByCategory;
+  const recentProducts = recent.ids.map(id => products.find(product => product.id === id)).filter((product): product is Product => Boolean(product)).slice(0, 10);
+  const popularProducts = popularList.map(id => products.find(product => product.id === id)).filter((product): product is Product => Boolean(product) && isPurchasable(product as Product)).slice(0, 8);
+
+  // Record what the shopper looks at (anonymous) and remember it for "Recently viewed".
+  useEffect(() => {
+    if (!viewProductId || isStaff) return;
+    recordSignal({ k: 'view', id: viewProductId });
+    recent.push(viewProductId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewProductId]);
+  useEffect(() => {
+    const words = searchText.trim();
+    if (isStaff || words.length < 3) return undefined;
+    const timer = window.setTimeout(() => recordSignal({ k: 'search', q: words, n: filteredProducts.length }), 1500);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchText, filteredProducts.length]);
 
   const newEnquiryCount = enquiries.filter(item => item.status === 'NEW').length;
   const newFeedbackCount = feedbackItems.filter(item => item.status === 'NEW').length;
@@ -2148,6 +2246,12 @@ export default function App() {
                   </div>
                 )}
                 <textarea placeholder="Product Description" value={newProduct.description} onChange={e => setNewProduct({ ...newProduct, description: e.target.value })} style={{ padding: '0.6rem', gridColumn: '1 / -1' }} />
+                {firebaseConfigured && (
+                  <div style={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
+                    <button type="button" className="mr-btn mr-btn-ghost" disabled={descriptionBusy || (!newProduct.name && productMediaFiles.length === 0)} onClick={() => void handleSuggestDescription()}>{descriptionBusy ? 'Looking at the photo...' : '✨ Suggest description from the photo'}</button>
+                    <small style={{ color: '#666' }}>A draft written by AI from your first photo and the details above. Always read and edit it.</small>
+                  </div>
+                )}
                 <button type="submit" disabled={isUploadingProduct} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', gridColumn: '1 / -1' }}>
                   {isUploadingProduct ? 'Uploading media...' : t.publishProduct}
                 </button>
@@ -2232,7 +2336,17 @@ export default function App() {
                       <div style={{ fontSize: '0.8rem', color: '#777', margin: '0.2rem 0' }}>{new Date(enquiry.createdAt).toLocaleString()}</div>
                       {enquiry.productName && <div style={{ fontSize: '0.85rem', color: '#555' }}>About: {enquiry.productName}</div>}
                       <p style={{ margin: '0.4rem 0', whiteSpace: 'pre-wrap' }}>{enquiry.message}</p>
+                      {replyDrafts[enquiry.id] !== undefined && (
+                        <div style={{ margin: '0.4rem 0', display: 'grid', gap: '0.4rem' }}>
+                          <textarea value={replyDrafts[enquiry.id]} onChange={event => setReplyDrafts(current => ({ ...current, [enquiry.id]: event.target.value }))} rows={4} aria-label="Draft reply" style={{ padding: '0.5rem' }} />
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                            <a href={whatsAppLink(enquiry.phone, replyDrafts[enquiry.id])} target="_blank" rel="noreferrer" style={{ backgroundColor: '#25d366', color: '#fff', textDecoration: 'none', fontWeight: 'bold', padding: '0.4rem 0.8rem', borderRadius: '4px' }}>Open WhatsApp with this reply</a>
+                            <small style={{ color: '#666' }}>AI draft: nothing is sent until you press send in WhatsApp.</small>
+                          </div>
+                        </div>
+                      )}
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                        {firebaseConfigured && <button type="button" disabled={replyBusy === enquiry.id} onClick={() => void handleDraftReply(enquiry)} style={{ padding: '0.4rem 0.8rem', cursor: 'pointer' }}>{replyBusy === enquiry.id ? 'Drafting...' : '✨ Draft reply'}</button>}
                         <a href={whatsAppLink(enquiry.phone, `Hello ${enquiry.name}, thank you for contacting Mala Royale${enquiry.productName ? ` about ${enquiry.productName}` : ''}. `)} target="_blank" rel="noreferrer" style={{ backgroundColor: '#25d366', color: '#fff', textDecoration: 'none', fontWeight: 'bold', padding: '0.4rem 0.8rem', borderRadius: '4px' }}>Reply on WhatsApp</a>
                         <button type="button" onClick={() => void handleEnquiryStatus(enquiry, enquiry.status === 'NEW' ? 'REPLIED' : 'NEW')} style={{ padding: '0.4rem 0.8rem', cursor: 'pointer' }}>{enquiry.status === 'NEW' ? 'Mark replied' : 'Mark as new'}</button>
                         <button type="button" onClick={() => void handleDeleteEnquiry(enquiry)} style={{ padding: '0.4rem 0.8rem', backgroundColor: '#fff', color: '#8b1e2d', border: '1px solid #8b1e2d', borderRadius: '4px', cursor: 'pointer' }}>Delete</button>
@@ -2421,9 +2535,10 @@ export default function App() {
               <Suspense fallback={<LazyFallback />}><FeedbackPanel feedback={feedbackItems} onStatus={handleFeedbackStatus} onDelete={handleDeleteFeedback} /></Suspense>
             )}
 
-            {hostTab === 'INSIGHTS' && (
+            {hostTab === 'INSIGHTS' && (<>
               <Suspense fallback={<LazyFallback />}><HostAnalytics orders={activeOrders} products={products} enquiries={enquiries} weights={aiWeights} onFeedback={handleInsightFeedback} isDeveloper={role === 'DEVELOPER'} onReset={handleResetInsights} /></Suspense>
-            )}
+              {firebaseConfigured && <Suspense fallback={<LazyFallback />}><ShopperSignals products={products} orders={liveOrders} onPublish={handlePublishPopular} /></Suspense>}
+            </>)}
           </div>
         )}
 
@@ -2511,6 +2626,8 @@ export default function App() {
               <>
             {categoryTiles.length >= 2 && <CategoryTiles tiles={categoryTiles} active={categoryFilter} onSelect={name => { withViewTransition(() => setCategoryFilter(categoryFilter === name ? 'All' : name)); scrollToCatalog(); }} tr={tr} />}
             <ColorRow colors={colorTiles} active={colorFilter} onSelect={name => { withViewTransition(() => setColorFilter(name)); if (name) scrollToCatalog(); }} tr={tr} />
+            {!searchText && !wishOnly && <ProductRail title={tr('Popular right now')} products={popularProducts} onOpen={id => setViewProductId(id)} />}
+            {!searchText && !wishOnly && <ProductRail title={tr('Recently viewed')} products={recentProducts} onOpen={id => setViewProductId(id)} />}
             <StoryShowcase products={products} onSelect={product => focusProduct(product.id)} />
 
             {/* Sticky filter bar */}
@@ -2525,7 +2642,7 @@ export default function App() {
               <button type="button" className="mr-chip" aria-pressed={onlyOffers} onClick={() => withViewTransition(() => setOnlyOffers(current => !current))}>{tr('On offer')}</button>
               <button type="button" className="mr-chip" aria-pressed={wishOnly} onClick={() => withViewTransition(() => setWishOnly(current => !current))}>♥ {tr('Saved')} ({wishlist.ids.length})</button>
               {colorFilter && <button type="button" className="mr-chip" aria-pressed="true" onClick={() => withViewTransition(() => setColorFilter(''))}>{tr('Colour')}: {colorFilter} ×</button>}
-              {searchText && <button type="button" className="mr-chip" aria-pressed="true" onClick={() => setSearchText('')}>“{searchText}” ×</button>}
+              {searchText && <button type="button" className="mr-chip" aria-pressed="true" onClick={() => setSearchText('')}>{smartSearch.mode === 'smart' ? '✨ ' : ''}“{searchText}” ×</button>}
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', marginLeft: 'auto' }}>
                 {tr('Sort by')}
                 <select value={sortBy} onChange={event => withViewTransition(() => setSortBy(event.target.value as SortKey))} style={{ padding: '0.4rem', borderRadius: '8px', border: '1px solid var(--mr-line)' }}>
@@ -2564,7 +2681,7 @@ export default function App() {
                     onView={() => trackProductView(product.id, product.category)}
                     overlay={(
                       <>
-                        <button type="button" className="mr-heart" aria-pressed={wishlist.has(product.id)} aria-label={tr('Save for later')} onClick={event => { event.stopPropagation(); wishlist.toggle(product.id); }}><HeartIcon filled={wishlist.has(product.id)} /></button>
+                        <button type="button" className="mr-heart" aria-pressed={wishlist.has(product.id)} aria-label={tr('Save for later')} onClick={event => { event.stopPropagation(); toggleWish(product.id); }}><HeartIcon filled={wishlist.has(product.id)} /></button>
                         <button type="button" className="mr-quick" onClick={event => { event.stopPropagation(); setViewProductId(product.id); trackProductView(product.id, product.category); }}>{tr('Quick view')}</button>
                       </>
                     )}
@@ -2613,7 +2730,7 @@ export default function App() {
                       {isPurchasable(product) ? (
                         <div style={{ display: 'flex', gap: '0.4rem' }}>
                           <button
-                            onClick={() => { const selection = selectionFor(product); addToCart(product, selection); trackAddToCart(product.id, product.category); }}
+                            onClick={() => { const selection = selectionFor(product); addToCart(product, selection); trackCartAndSignal(product.id, product.category); }}
                             style={{ backgroundColor: '#fff', color: 'var(--mr-primary)', border: '1px solid var(--mr-primary)', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
                           >
                             {tr('+ Add')}
@@ -2953,7 +3070,18 @@ export default function App() {
       </div>
 
       {!isStaff && (
-        <SiteFooter pages={sitePages} whatsapp={hostWhatsApp} whatsappUrl={hostWhatsApp ? whatsAppLink(hostWhatsApp, 'Hello Mala Royale, I have a question.') : undefined} onOpen={setPageView} tr={tr} />
+        <AssistantWidget
+          products={products}
+          canQuickAdd={product => isPurchasable(product) && compatibleKuchu(product, kuchuList).length === 0}
+          onView={id => setViewProductId(id)}
+          onAdd={product => { addToCart(product); trackCartAndSignal(product.id, product.category); }}
+          onAsked={(question, count, plain) => recordSignal({ k: 'ask', q: question, n: count, ...(plain ? { f: 1 } : {}) })}
+          whatsappUrl={hostWhatsApp ? whatsAppLink(hostWhatsApp, 'Hello Mala Royale, I have a question.') : undefined}
+          tr={tr}
+        />
+      )}
+      {!isStaff && (
+        <SiteFooter statsOn={statsOn} onStats={on => { setStatsOn(on); setStatsEnabled(on); }} pages={sitePages} whatsapp={hostWhatsApp} whatsappUrl={hostWhatsApp ? whatsAppLink(hostWhatsApp, 'Hello Mala Royale, I have a question.') : undefined} onOpen={setPageView} tr={tr} />
       )}
       {pageView && (
         <SitePageView
@@ -2980,7 +3108,7 @@ export default function App() {
           onAdd={() => {
             const selection = selectionFor(viewProduct);
             addToCart(viewProduct, selection);
-            trackAddToCart(viewProduct.id, viewProduct.category);
+            trackCartAndSignal(viewProduct.id, viewProduct.category);
             return true;
           }}
           onBuy={() => {
@@ -2988,7 +3116,7 @@ export default function App() {
             setViewProductId(null);
             buyNow(viewProduct, selection);
           }}
-          onToggleWish={() => wishlist.toggle(viewProduct.id)}
+          onToggleWish={() => toggleWish(viewProduct.id)}
           onShare={() => shareProduct(viewProduct)}
           onClose={() => setViewProductId(null)}
           onView={() => trackProductView(viewProduct.id, viewProduct.category)}

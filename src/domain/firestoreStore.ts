@@ -346,6 +346,34 @@ export async function saveSitePages(pages: SitePages): Promise<void> {
   });
 }
 
+// "Popular right now": a short list of product ids the host publishes from real shopper activity and sales.
+export function subscribePopular(onChange: (ids: string[]) => void, onError: (error: Error) => void, options: { live?: boolean } = {}) {
+  const db = requireFirestore();
+  const read = (data: Record<string, unknown> | undefined) => (data && Array.isArray(data.ids) ? data.ids.filter((id): id is string => typeof id === 'string').slice(0, 12) : []);
+  if (!options.live) {
+    return loadWithCache<string[]>({
+      key: 'popular',
+      ttlMs: PUBLIC_CACHE_TTL_MS,
+      load: async () => {
+        const snapshot = await getDoc(doc(db, 'settings', 'popular'));
+        return read(snapshot.exists() ? snapshot.data() : undefined);
+      },
+      onChange,
+      onError,
+    });
+  }
+  return onSnapshot(doc(db, 'settings', 'popular'), snapshot => {
+    const ids = read(snapshot.exists() ? snapshot.data() : undefined);
+    writeCache('popular', ids);
+    onChange(ids);
+  }, onError);
+}
+
+export async function savePopular(ids: string[]): Promise<void> {
+  const db = requireFirestore();
+  await setDoc(doc(db, 'settings', 'popular'), { ids: ids.slice(0, 12), updatedAt: new Date().toISOString() });
+}
+
 export async function saveUpiSettings(upiId: string, payeeName: string): Promise<void> {
   const db = requireFirestore();
   const cleanId = upiId.trim();

@@ -6,17 +6,20 @@ import {
   deleteField,
   doc,
   getDoc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
+  where,
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
 import { CONFIG } from '../config';
 import { requireFirestore } from './firestoreStore';
 import type { AuditEntry, HostRecord } from './types';
+import type { SignalSession } from './signals';
 
 const HOST_ID_PATTERN = /^[A-Za-z0-9_-]{2,24}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -135,4 +138,15 @@ export async function restoreOrder(orderId: string): Promise<void> {
 export async function deleteOrderForever(orderId: string): Promise<void> {
   const db = requireFirestore();
   await deleteDoc(doc(db, 'orders', orderId));
+}
+
+// The anonymous shopper signals of the last few days (staff only). One read per stored batch, so the size is limited.
+export async function loadSignals(days: number): Promise<SignalSession[]> {
+  const db = requireFirestore();
+  const cutoff = new Date(Date.now() + 330 * 60_000 - days * 86_400_000).toISOString().slice(0, 10);
+  const snapshot = await getDocs(query(collection(db, 'signals'), where('day', '>=', cutoff), orderBy('day', 'desc'), limit(300)));
+  return snapshot.docs.map(item => {
+    const data = item.data() as { day?: string; events?: SignalSession['events'] };
+    return { day: data.day || '', events: Array.isArray(data.events) ? data.events : [] };
+  });
 }

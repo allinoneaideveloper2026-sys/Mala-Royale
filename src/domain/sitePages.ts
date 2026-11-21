@@ -99,7 +99,7 @@ If you tick the boxes at checkout, we send order updates by email or WhatsApp, a
 
 ## 9. Your information
 
-We use your name, phone number, address and email to process and deliver your order and to contact you about it. We do not sell your information. Payment screenshots are used only to verify your payment.
+We use your name, phone number, address and email to process and deliver your order and to contact you about it. We do not sell your information. Payment screenshots are used only to verify your payment. We also record anonymous visit statistics (for example which items are viewed and what is searched for, with no name, phone number or account) to improve the shop; you can turn this off at the bottom of any page.
 
 ## 10. Law
 
