@@ -16,7 +16,7 @@
     "DEVELOPER_EMAILS": "allinoneaideveloper2026@gmail.com",
     "OWNER_EMAILS": "allinoneaideveloper2026@gmail.com",
     "SHOP_NAME": "Mala Royale",
-    "SITE_URL": "https://mala-royale-optimized.workers.dev",
+    "SITE_URL": "https://mala-royale-optimized.allinoneaideveloper2026.workers.dev/",
     // Notifications are OFF until you change these (see DEPLOY_CLOUDFLARE.md). Email: "gmail" or "resend". WhatsApp: "cloud".
     "EMAIL_PROVIDER": "off",
     "WHATSAPP_PROVIDER": "off",
