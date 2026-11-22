@@ -12,6 +12,7 @@
   "ai": { "binding": "AI" },
   "vars": {
     "FIREBASE_PROJECT_ID": "mala-royale",
+    "FIREBASE_API_KEY": "AIzaSyDvtgycbt3lbqPEuTt3tbWm3QZIFIfJQpM",
     "DEVELOPER_EMAILS": "allinoneaideveloper2026@gmail.com",
     "OWNER_EMAILS": "allinoneaideveloper2026@gmail.com",
     "SHOP_NAME": "Mala Royale",
