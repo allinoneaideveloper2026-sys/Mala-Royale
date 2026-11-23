@@ -28,6 +28,7 @@ export default function AssistantWidget({
   canQuickAdd,
   onView,
   onAdd,
+  onOpenCart,
   onAsked,
   whatsappUrl,
   tr,
@@ -35,7 +36,8 @@ export default function AssistantWidget({
   products: Product[];
   canQuickAdd: (product: Product) => boolean;
   onView: (id: string) => void;
-  onAdd: (product: Product) => void;
+  onAdd: (product: Product) => boolean;
+  onOpenCart?: () => void;
   /** Called after each answer (anonymous statistics): the question, how many products it found, and whether it was a plain fallback. */
   onAsked?: (question: string, count: number, plain: boolean) => void;
   whatsappUrl?: string;
@@ -45,6 +47,7 @@ export default function AssistantWidget({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [added, setAdded] = useState<string[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [messages, busy, open]);
@@ -124,7 +127,9 @@ export default function AssistantWidget({
                         </div>
                         <div style={{ display: 'grid', gap: '0.25rem' }}>
                           <button type="button" className="mr-chip" onClick={() => { onView(product.id); setOpen(false); }}>{tr('View')}</button>
-                          {canQuickAdd(product) && <button type="button" className="mr-chip" onClick={() => onAdd(product)}>{tr('Add')}</button>}
+                          {canQuickAdd(product) && (added.includes(product.id)
+                            ? <button type="button" className="mr-chip mr-added" onClick={() => { onOpenCart?.(); setOpen(false); }}>✓ {tr('Added · View bag')}</button>
+                            : <button type="button" className="mr-chip" onClick={() => { if (onAdd(product)) setAdded(current => [...current, product.id]); }}>{tr('Add')}</button>)}
                         </div>
                       </div>
                     ))}

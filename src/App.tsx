@@ -130,6 +130,8 @@ export default function App() {
   const [pageView, setPageView] = useState<SitePageKey | null>(null);
   const [productsReady, setProductsReady] = useState(!firebaseConfigured);
   const wishlist = useWishlist();
+  const [bagToast, setBagToast] = useState<{ text: string; id: number } | null>(null);
+  const [justAdded, setJustAdded] = useState<string | null>(null);
   const recent = useRecentlyViewed();
   const [popularList, setPopularList] = useState<string[]>([]);
   const [statsOn, setStatsOn] = useState(statsEnabled());
@@ -417,6 +419,18 @@ export default function App() {
       setPrefixDraft(config.bangalorePrefixes.join(', '));
     }, () => undefined, { live: isStaff });
   }, [isStaff]);
+
+  // The "added to bag" message and the green button fade out by themselves.
+  useEffect(() => {
+    if (!bagToast) return undefined;
+    const timer = window.setTimeout(() => setBagToast(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [bagToast]);
+  useEffect(() => {
+    if (!justAdded) return undefined;
+    const timer = window.setTimeout(() => setJustAdded(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [justAdded]);
 
   // Pre-fill the contact email from the Google sign-in, and fade the host's "customer notified" note.
   useEffect(() => {
@@ -1434,6 +1448,21 @@ export default function App() {
     setCustomerTab('SHOP');
   };
   // What the customer picked on a saree card: none, or one Kuchu design with a thread colour.
+  // Adds to the bag and shows the shopper that it worked (button turns green, a message with "View bag" appears).
+  const addWithFeedback = (product: Product, selection?: KuchuSelection): boolean => {
+    if (!isPurchasable(product)) return false;
+    const limit = maxOrderable(products.find(item => item.id === product.id) || product);
+    const inBag = cart.filter(line => line.product.id === product.id).reduce((sum, line) => sum + line.quantity, 0);
+    if (inBag >= limit) {
+      setBagToast({ text: `Only ${limit} available, and ${inBag === 1 ? 'it is' : 'they are'} already in your bag.`, id: Date.now() });
+      return false;
+    }
+    addToCart(product, selection);
+    trackCartAndSignal(product.id, product.category);
+    setJustAdded(product.id);
+    setBagToast({ text: `${product.name}${selection?.kuchu ? ` + ${selection.kuchu.name}` : ''} added to your bag.`, id: Date.now() });
+    return true;
+  };
   const selectedKuchuFor = (product: Product): KuchuDesign | null => compatibleKuchu(product, kuchuList).find(item => item.id === kuchuChoice[choiceKey(product)]) || null;
   const selectionFor = (product: Product): KuchuSelection => {
     const kuchu = selectedKuchuFor(product);
@@ -2730,10 +2759,11 @@ export default function App() {
                       {isPurchasable(product) ? (
                         <div style={{ display: 'flex', gap: '0.4rem' }}>
                           <button
-                            onClick={() => { const selection = selectionFor(product); addToCart(product, selection); trackCartAndSignal(product.id, product.category); }}
-                            style={{ backgroundColor: '#fff', color: 'var(--mr-primary)', border: '1px solid var(--mr-primary)', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
+                            onClick={() => addWithFeedback(product, selectionFor(product))}
+                            className={justAdded === product.id ? 'mr-added' : undefined}
+                            style={{ backgroundColor: '#fff', color: 'var(--mr-primary)', border: '1px solid var(--mr-primary)', padding: '0.45rem 0.65rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', transition: 'background 0.25s, color 0.25s' }}
                           >
-                            {tr('+ Add')}
+                            {justAdded === product.id ? `✓ ${tr('Added')}` : tr('+ Add')}
                           </button>
                           <button
                             onClick={() => { const selection = selectionFor(product); buyNow(product, selection); }}
@@ -3074,7 +3104,8 @@ export default function App() {
           products={products}
           canQuickAdd={product => isPurchasable(product) && compatibleKuchu(product, kuchuList).length === 0}
           onView={id => setViewProductId(id)}
-          onAdd={product => { addToCart(product); trackCartAndSignal(product.id, product.category); }}
+          onAdd={product => addWithFeedback(product)}
+          onOpenCart={() => setIsCartOpen(true)}
           onAsked={(question, count, plain) => recordSignal({ k: 'ask', q: question, n: count, ...(plain ? { f: 1 } : {}) })}
           whatsappUrl={hostWhatsApp ? whatsAppLink(hostWhatsApp, 'Hello Mala Royale, I have a question.') : undefined}
           tr={tr}
@@ -3105,12 +3136,7 @@ export default function App() {
           onKuchu={id => setKuchuChoice(current => ({ ...current, [choiceKey(viewProduct)]: id }))}
           onVariant={id => setViewProductId(id)}
           onOpen={id => setViewProductId(id)}
-          onAdd={() => {
-            const selection = selectionFor(viewProduct);
-            addToCart(viewProduct, selection);
-            trackCartAndSignal(viewProduct.id, viewProduct.category);
-            return true;
-          }}
+          onAdd={() => addWithFeedback(viewProduct, selectionFor(viewProduct))}
           onBuy={() => {
             const selection = selectionFor(viewProduct);
             setViewProductId(null);
@@ -3186,6 +3212,7 @@ export default function App() {
           </button>
         </div>
       )}
+      {bagToast && <div key={bagToast.id} role="status" className="mr-toast"><span>{bagToast.text}</span><button type="button" onClick={() => { setBagToast(null); setIsCartOpen(true); }}>{tr('View bag')}</button></div>}
       {notifyNote && <div role="status" style={{ position: 'fixed', top: '1rem', right: '1rem', zIndex: 1100, background: '#1b5e20', color: '#fff', padding: '0.6rem 0.9rem', borderRadius: '8px', boxShadow: '0 4px 14px rgba(0,0,0,0.25)', maxWidth: '320px', fontSize: '0.9rem' }}>{notifyNote}</div>}
       {acceptDialog && (
         <ConfirmDialog

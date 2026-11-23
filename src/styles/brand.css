@@ -128,9 +128,10 @@ button, input, select, textarea { font-family: inherit; }
 
 /* ---------- quick view / product page ---------- */
 .mr-modal-back { position: fixed; inset: 0; z-index: 900; background: rgba(11, 20, 40, 0.55); display: flex; align-items: flex-end; justify-content: center; animation: mr-fade 0.25s ease both; }
-.mr-modal { background: var(--mr-ivory); width: min(1040px, 100%); max-height: 94vh; overflow-y: auto; border-radius: 22px 22px 0 0; box-shadow: var(--mr-shadow-lg); animation: mr-slide-up 0.4s var(--mr-ease) both; position: relative; }
+.mr-modal { background: var(--mr-ivory); width: min(1040px, 100%); max-height: 94vh; max-height: 94dvh; overflow-y: auto; border-radius: 22px 22px 0 0; box-shadow: var(--mr-shadow-lg); animation: mr-slide-up 0.4s var(--mr-ease) both; position: relative; }
 @media (min-width: 820px) { .mr-modal-back { align-items: center; padding: 2vh 1rem; } .mr-modal { border-radius: 22px; } }
-.mr-modal-close { position: sticky; top: 0.6rem; float: right; margin: 0.6rem 0.6rem 0 0; z-index: 5; width: 40px; height: 40px; border-radius: 50%; border: 0; background: #fff; color: var(--mr-primary); font-size: 1.2rem; cursor: pointer; box-shadow: var(--mr-shadow); }
+.mr-modal-bar { position: sticky; top: 0; z-index: 6; display: flex; justify-content: flex-end; padding: 0.6rem 0.7rem 0; pointer-events: none; height: 0; overflow: visible; }
+.mr-modal-close { pointer-events: auto; min-width: 44px; min-height: 44px; padding: 0 1rem; border-radius: 999px; border: 1px solid var(--mr-line); background: #fff; color: var(--mr-primary); font-weight: 700; cursor: pointer; box-shadow: var(--mr-shadow); }
 .mr-pdp { display: grid; grid-template-columns: 1fr; gap: 1.4rem; padding: 1.2rem; }
 @media (min-width: 820px) { .mr-pdp { grid-template-columns: 1.05fr 1fr; padding: 1.8rem; } }
 .mr-pdp h2 { margin: 0 0 0.3rem; font-size: clamp(1.7rem, 3.5vw, 2.3rem); color: var(--mr-primary); line-height: 1.15; }
@@ -190,3 +191,25 @@ button, input, select, textarea { font-family: inherit; }
 .mr-rail button:hover { transform: translateY(-5px); box-shadow: var(--mr-shadow-lg); }
 .mr-rail img { width: 100%; aspect-ratio: 4 / 5; object-fit: cover; display: block; background: var(--mr-tint); }
 .mr-rail span { display: block; padding: 0.5rem 0.6rem; font-size: 0.78rem; }
+
+/* ---------- full view (whole picture + details) ---------- */
+.mr-fullview { position: fixed; inset: 0; z-index: 2000; background: rgba(11, 20, 40, 0.92); display: flex; justify-content: center; animation: mr-fade 0.2s ease both; }
+.mr-fullview-panel { background: var(--mr-ivory); width: min(980px, 100%); height: 100vh; height: 100dvh; overflow-y: auto; display: flex; flex-direction: column; animation: mr-slide-up 0.3s var(--mr-ease) both; }
+@media (min-width: 900px) { .mr-fullview { padding: 2vh 1rem; align-items: center; } .mr-fullview-panel { height: 96vh; height: 96dvh; border-radius: 18px; } }
+.mr-fullview-bar { position: sticky; top: 0; z-index: 6; display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.6rem 0.8rem; padding-top: max(0.6rem, env(safe-area-inset-top)); background: var(--mr-ivory); border-bottom: 1px solid var(--mr-line); }
+.mr-fullview-title { font-family: var(--mr-font-display); font-size: 1.2rem; color: var(--mr-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-fullview-close { flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0 1rem; border-radius: 999px; border: 0; background: var(--mr-navy); color: var(--mr-gold); font-weight: 700; cursor: pointer; }
+.mr-fullview-stage { position: relative; background: #0f182c; display: flex; align-items: center; justify-content: center; min-height: 46vh; max-height: 78vh; max-height: 78dvh; touch-action: pan-y pinch-zoom; }
+.mr-fullview-stage img { max-width: 100%; max-height: 78vh; max-height: 78dvh; object-fit: contain; display: block; }
+.mr-fullview-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 56px; border: 0; border-radius: 10px; background: rgba(16, 29, 56, 0.72); color: #fff; font-size: 1.8rem; cursor: pointer; }
+.mr-fullview-thumbs { display: flex; gap: 0.4rem; overflow-x: auto; padding: 0.2rem 0.8rem 0.6rem; }
+.mr-fullview-thumbs button { flex: 0 0 56px; height: 70px; padding: 0; border: 2px solid transparent; border-radius: 8px; overflow: hidden; background: none; cursor: pointer; }
+.mr-fullview-thumbs button[aria-current='true'] { border-color: var(--mr-gold); }
+.mr-fullview-thumbs img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mr-fullview-details { padding: 0.4rem 1rem 1rem; }
+.mr-fullview-back { position: sticky; bottom: 0; margin-top: auto; padding: 0.7rem 0.8rem; padding-bottom: max(0.7rem, env(safe-area-inset-bottom)); background: var(--mr-ivory); border-top: 1px solid var(--mr-line); }
+
+/* ---------- "added to bag" feedback ---------- */
+.mr-toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 1200; max-width: min(92vw, 460px); display: flex; gap: 0.8rem; align-items: center; padding: 0.7rem 1rem; border-radius: 14px; background: var(--mr-navy); color: var(--mr-ivory); border: 1px solid var(--mr-gold); box-shadow: var(--mr-shadow-lg); font-size: 0.9rem; animation: mr-fade-up 0.35s var(--mr-ease) both; }
+.mr-toast button { background: var(--mr-gold); color: var(--mr-ink); border: 0; border-radius: 999px; padding: 0.35rem 0.9rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.mr-added { background: #1b7a3a !important; color: #fff !important; border-color: #1b7a3a !important; }

@@ -44,7 +44,7 @@ export default function SitePageView({
   return (
     <div className="mr-modal-back" role="presentation" onClick={onClose}>
       <div className="mr-modal" role="dialog" aria-modal="true" aria-label={page.title} onClick={event => event.stopPropagation()} style={{ width: 'min(760px, 100%)' }}>
-        <button ref={closeRef} type="button" className="mr-modal-close" onClick={onClose} aria-label={tr('Close')}>×</button>
+        <div className="mr-modal-bar"><button ref={closeRef} type="button" className="mr-modal-close" onClick={onClose}>✕ {tr('Close')}</button></div>
         <div style={{ padding: '1.6rem' }}>
           <h2 style={{ margin: '0 0 0.6rem', color: 'var(--mr-primary)', fontSize: 'clamp(1.8rem, 4vw, 2.4rem)' }}>{page.title}</h2>
           <hr className="mr-gold-rule" />

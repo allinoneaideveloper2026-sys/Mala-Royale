@@ -89,10 +89,10 @@ export default function ProductQuickView({
   return (
     <div className="mr-modal-back" role="presentation" onClick={onClose}>
       <div className="mr-modal" role="dialog" aria-modal="true" aria-label={product.name} onClick={event => event.stopPropagation()}>
-        <button ref={closeRef} type="button" className="mr-modal-close" onClick={onClose} aria-label={tr('Close')}>×</button>
+        <div className="mr-modal-bar"><button ref={closeRef} type="button" className="mr-modal-close" onClick={onClose}>✕ {tr('Close')}</button></div>
         <div className="mr-pdp">
           <div>
-            <ProductGallery key={product.id} product={product} badges={badges} onView={onView} />
+            <ProductGallery key={product.id} product={product} badges={badges} onView={onView} fit="contain" />
           </div>
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', alignItems: 'flex-start' }}>
