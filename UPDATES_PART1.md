@@ -75,3 +75,8 @@ Still to come: item IDs and colour variants, partial item rejection, Kuchu catal
 - More like this (meaning-based), Recently viewed, Popular right now.
 - Anonymous shopper signals (opt-out in the footer) and a Shopper signals panel in Host Insights.
 - Host assistant drafts: description from photo, WhatsApp reply drafts.
+
+## Fixes: full view and "added to bag"
+- "View full" now opens a proper full-screen view: whole picture (never cropped), swipe or arrows, thumbnails, zoom, the product name, price, colour, size, item ID and description, a Close button at the top and a big "Close and go back" at the bottom. It is drawn on top of everything so the Close button can no longer be hidden on small screens.
+- The product pop-up shows the whole picture and has a Close button that always stays on screen.
+- Adding to the bag now gives clear feedback: the button turns green and says "Added", a message "... added to your bag" with a "View bag" button appears, and Ask Mala's Add button changes to "Added · View bag".
