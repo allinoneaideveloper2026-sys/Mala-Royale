@@ -538,3 +538,55 @@ describe('shopper signals', () => {
     expect(viewedButNotAdded(summary)[0].id).toBe('a');
   });
 });
+
+import { benefitText, bestDiscount, discountFor, nextOffer, offerHeadline, parseRules, ruleIsLive, validateRule, type DiscountRule } from '../src/domain/discounts';
+import { acceptedTotal as acceptedAfterOffer, refundShare as refundAfterOffer } from '../src/domain/orderItems';
+
+describe('host offers (discount rules)', () => {
+  const five: DiscountRule = { id: 'a', name: 'Festive 5%', type: 'PERCENT', value: 5, minSpend: 5000, active: true };
+  const flat: DiscountRule = { id: 'b', name: 'Flat 400', type: 'FLAT', value: 400, minSpend: 3000, active: true };
+  const now = Date.UTC(2026, 10, 23, 5, 0);
+
+  it('gives 5% only from the minimum spend', () => {
+    expect(discountFor(five, 4999)).toBe(0);
+    expect(discountFor(five, 5000)).toBe(250);
+    expect(discountFor(five, 5750)).toBe(287); // rounded down to a whole rupee
+  });
+  it('respects the cap and never makes the bag free', () => {
+    expect(discountFor({ ...five, maxDiscount: 200 }, 10000)).toBe(200);
+    expect(discountFor({ ...flat, minSpend: 0, value: 999 }, 500)).toBe(499);
+  });
+  it('picks the offer that saves the most, and ignores switched-off or out-of-date ones', () => {
+    expect(bestDiscount(9000, [five, flat], now)?.ruleId).toBe('a'); // 5% = 450 beats a flat 400
+    expect(bestDiscount(6000, [five, flat], now)?.ruleId).toBe('b'); // 5% = 300, flat 400 saves more
+    expect(bestDiscount(3200, [five, flat], now)?.ruleId).toBe('b');
+    expect(bestDiscount(6000, [{ ...five, active: false }], now)).toBe(null);
+    expect(ruleIsLive({ ...five, endsOn: '2026-11-22' }, now)).toBe(false);
+    expect(ruleIsLive({ ...five, startsOn: '2026-11-24' }, now)).toBe(false);
+    expect(ruleIsLive({ ...five, startsOn: '2026-11-23', endsOn: '2026-11-23' }, now)).toBe(true);
+  });
+  it('tells the customer what to add to reach the next offer', () => {
+    const next = nextOffer(4000, [five, flat], now);
+    expect(next?.rule.id).toBe('a');
+    expect(next?.shortBy).toBe(1000);
+    expect(nextOffer(9000, [five], now)).toBe(null);
+  });
+  it('writes the banner text', () => {
+    expect(offerHeadline(five)).toBe('Spend ₹5,000 or more and get 5% off');
+    expect(benefitText({ ...five, maxDiscount: 500 })).toBe('5% off (up to ₹500)');
+    expect(offerHeadline({ ...flat, minSpend: 0 })).toBe('Get ₹400 off on your order');
+  });
+  it('rejects nonsense and keeps only valid saved rules', () => {
+    expect(validateRule({ ...five, value: 95 })).not.toBe('');
+    expect(validateRule({ ...flat, value: 3500 })).not.toBe('');
+    expect(validateRule({ ...five, name: ' ' })).not.toBe('');
+    expect(validateRule(five)).toBe('');
+    expect(parseRules([five, { id: 'x', name: '', type: 'PERCENT', value: 5, minSpend: 0, active: true }, 'junk']).length).toBe(1);
+  });
+  it('refunds only the share the customer actually paid when an offer was applied', () => {
+    const order = { subtotal: 6000, itemTotal: 5700, items: [{ productId: 'p', name: 'x', price: 3000, quantity: 1, status: 'REJECTED' }, { productId: 'q', name: 'y', price: 3000, quantity: 1 }] } as any;
+    expect(refundAfterOffer(order, 3000)).toBe(2850);
+    expect(acceptedAfterOffer(order)).toBe(2850);
+    expect(acceptedAfterOffer({ itemTotal: 6000, items: [{ productId: 'p', name: 'x', price: 3000, quantity: 1, status: 'REJECTED' }] } as any)).toBe(3000);
+  });
+});
