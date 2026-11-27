@@ -1,5 +1,6 @@
 // What customers are told at each stage of an order. Pure text-building, shared by the server and the tests.
 import type { Consent, Order } from './types';
+import { acceptedTotal } from './orderItems';
 
 export type NotifyEvent = 'ORDER_PLACED' | 'COURIER_QUOTE_ADDED' | 'PAYMENT_VERIFIED' | 'DISPATCHED' | 'DELIVERED' | 'CANCELLED' | 'ITEM_REJECTED';
 
@@ -53,7 +54,7 @@ export function composeMessage(event: NotifyEvent, order: Order, shop: ShopInfo)
   const activeItems = (order.items || []).filter(item => item.status !== 'REJECTED');
   const rejectedItems = (order.items || []).filter(item => item.status === 'REJECTED');
   const rejectedTotal = rejectedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const total = Math.max(0, order.itemTotal - rejectedTotal);
+  const total = acceptedTotal(order);
   const courier = order.courierBill;
   const tracking = [courier?.courierName || order.deliveryPartner, courier?.trackingId].filter(Boolean).join(' - tracking ');
 
@@ -64,7 +65,7 @@ export function composeMessage(event: NotifyEvent, order: Order, shop: ShopInfo)
     case 'ORDER_PLACED':
       subject = `We received your order ${id}`;
       status = 'Order received';
-      body.push('Thank you for your order. We are checking your payment and will confirm it shortly.', '', ...activeItems.map(lineText), '', `Items total: Rs ${total}`);
+      body.push('Thank you for your order. We are checking your payment and will confirm it shortly.', '', ...activeItems.map(lineText), '', ...(order.discount ? [`Offer applied (${order.discount.name}): -Rs ${order.discount.amount}`] : []), `Items total: Rs ${total}`);
       if (order.courierWaived) body.push('Courier charge: none for this order.');
       else body.push('If a courier charge applies, we will send you the amount to pay.');
       break;

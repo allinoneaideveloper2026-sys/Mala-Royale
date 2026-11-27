@@ -1,3 +1,4 @@
+import type { AppliedDiscount } from './discounts';
 export type OrderStage = 
   | 'ORDER_RECEIVED'
   | 'ITEM_PAYMENT_VERIFIED'
@@ -207,6 +208,9 @@ export interface Order {
   userId: string;
   items: OrderLine[];
   itemTotal: number;
+  /** The bag value before any offer, and the offer taken off (itemTotal is what the customer pays). */
+  subtotal?: number;
+  discount?: AppliedDiscount;
   /** Value of items the host rejected one by one (see items[].status). */
   rejectedTotal?: number;
   /** Amount to refund for rejected items; the customer is asked for refund details. */

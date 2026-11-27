@@ -11,8 +11,14 @@ export const lineAmount = (line: Line): number => line.price * line.quantity;
 
 export const rejectedTotal = (order: Pick<Order, 'items'>): number => order.items.filter(isLineRejected).reduce((sum, line) => sum + lineAmount(line), 0);
 
+/** What the customer actually paid per rupee of item value: 1 normally, less when an offer was applied. */
+export const paidRatio = (order: Pick<Order, 'itemTotal' | 'subtotal'>): number => (order.subtotal && order.subtotal > 0 ? Math.min(1, order.itemTotal / order.subtotal) : 1);
+
+/** The refund for rejected items: their value, reduced by the same share of the offer the customer received. */
+export const refundShare = (order: Pick<Order, 'itemTotal' | 'subtotal'>, rejectedValue: number): number => Math.round(rejectedValue * paidRatio(order) * 100) / 100;
+
 /** What the customer should pay for after rejected lines are taken out. */
-export const acceptedTotal = (order: Pick<Order, 'items' | 'itemTotal'>): number => Math.max(0, order.itemTotal - rejectedTotal(order));
+export const acceptedTotal = (order: Pick<Order, 'items' | 'itemTotal' | 'subtotal'>): number => Math.max(0, Math.round((order.itemTotal - refundShare(order, rejectedTotal(order))) * 100) / 100);
 
 export type RejectLineResult =
   | { ok: true; items: Line[]; rejectedTotal: number; rejectedLine: Line }

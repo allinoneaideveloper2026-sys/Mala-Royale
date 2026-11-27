@@ -21,7 +21,8 @@ import { validateRefundDetails } from './refund';
 import { isValidUpiId } from './upi';
 import { designKeyFor } from './itemCode';
 import { mergePages, type SitePages } from './sitePages';
-import { activeQuantityByProduct, rejectLine } from './orderItems';
+import { activeQuantityByProduct, refundShare, rejectLine } from './orderItems';
+import { bestDiscount, parseRules, validateRule, type AppliedDiscount, type DiscountRule } from './discounts';
 import { DEFAULT_SHIPPING, type CourierDecision, type ShippingConfig } from './shipping';
 import { isValidUtr, validateProofFile } from './paymentProof';
 import { compressImage } from '../app/imageCompress';
@@ -374,6 +375,40 @@ export async function savePopular(ids: string[]): Promise<void> {
   await setDoc(doc(db, 'settings', 'popular'), { ids: ids.slice(0, 12), updatedAt: new Date().toISOString() });
 }
 
+// Offers ("spend ₹5,000, get 5% off"). Customers read them (cached for 2 minutes); staff see changes live.
+const OFFERS_TTL_MS = 2 * 60 * 1000;
+
+export function subscribeDiscounts(onChange: (rules: DiscountRule[]) => void, onError: (error: Error) => void, options: { live?: boolean } = {}) {
+  const db = requireFirestore();
+  const read = (data: Record<string, unknown> | undefined) => parseRules(data?.rules);
+  if (!options.live) {
+    return loadWithCache<DiscountRule[]>({
+      key: 'discounts',
+      ttlMs: OFFERS_TTL_MS,
+      load: async () => {
+        const snapshot = await getDoc(doc(db, 'settings', 'discounts'));
+        return read(snapshot.exists() ? snapshot.data() : undefined);
+      },
+      onChange,
+      onError,
+    });
+  }
+  return onSnapshot(doc(db, 'settings', 'discounts'), snapshot => {
+    const rules = read(snapshot.exists() ? snapshot.data() : undefined);
+    writeCache('discounts', rules);
+    onChange(rules);
+  }, onError);
+}
+
+export async function saveDiscounts(rules: DiscountRule[]): Promise<void> {
+  const db = requireFirestore();
+  for (const rule of rules) {
+    const problem = validateRule(rule);
+    if (problem) throw new Error(`${rule.name || 'An offer'}: ${problem}`);
+  }
+  await setDoc(doc(db, 'settings', 'discounts'), { rules: rules.slice(0, 12), updatedAt: new Date().toISOString() });
+}
+
 export async function saveUpiSettings(upiId: string, payeeName: string): Promise<void> {
   const db = requireFirestore();
   const cleanId = upiId.trim();
@@ -457,6 +492,7 @@ export async function createCloudOrder(
   courierDecision?: CourierDecision,
   finalSaleAcceptedAt?: string,
   consent?: Consent,
+  discount?: AppliedDiscount,
 ): Promise<Order> {
   const db = requireFirestore();
   if (!courierNoticeAccepted) throw new Error('Courier charge notice must be accepted prior to order placement.');
@@ -481,6 +517,7 @@ export async function createCloudOrder(
     ...(courierDecision ? { courierRule: courierDecision.rule, courierWaived: courierDecision.waived, courierRuleReason: courierDecision.reason } : {}),
     ...(finalSaleAcceptedAt ? { finalSaleAcceptedAt } : {}),
     ...(consent ? { consent } : {}),
+    ...(discount ? { discount, subtotal: items.reduce((sum, line) => sum + line.price * line.quantity, 0) } : {}),
   };
   const order: Order = {
     orderId,
@@ -505,6 +542,8 @@ export async function createCloudOrder(
     if (existingProof?.exists()) throw new Error('This payment screenshot was already used for another order. Please attach your own payment screenshot.');
 
     const productSnapshots = await Promise.all(stockEntries.map(([productId]) => transaction.get(doc(db, 'products', productId))));
+    const discountSnapshot = await transaction.get(doc(db, 'settings', 'discounts'));
+    const liveRules: DiscountRule[] = discountSnapshot.exists() ? parseRules((discountSnapshot.data() as { rules?: unknown }).rules) : [];
     const kuchuIds = Array.from(new Set(items.map(item => item.kuchuId).filter((id): id is string => Boolean(id))));
     const kuchuSnapshots = await Promise.all(kuchuIds.map(id => transaction.get(doc(db, 'kuchu', id))));
     const kuchuById = new Map<string, KuchuDesign>();
@@ -528,7 +567,10 @@ export async function createCloudOrder(
       if (Math.abs(line.price - expected) > 0.005) throw new Error(`The price of "${product.name}" has changed. Please check your cart and try again.`);
       checkedTotal += line.price * line.quantity;
     }
-    if (Math.abs(checkedTotal - itemTotal) > 0.005) throw new Error('Your cart total does not match the current prices. Please check your cart and try again.');
+    // The offer on the bag must be the one the shop's live rules give for this bag, and the total must be after that offer.
+    const expectedDiscount = bestDiscount(checkedTotal, liveRules, Date.now());
+    if ((discount?.amount || 0) !== (expectedDiscount?.amount || 0)) throw new Error('The offer on your bag has changed. Please review your bag and try again.');
+    if (Math.abs(checkedTotal - (expectedDiscount?.amount || 0) - itemTotal) > 0.005) throw new Error('Your cart total does not match the current prices. Please check your cart and try again.');
     const reservations: Array<{ ref: DocumentReference; quantity: number }> = [];
     productSnapshots.forEach((productSnapshot, index) => {
       if (!productSnapshot.exists()) {
@@ -702,7 +744,7 @@ export async function rejectCloudOrderItem(orderId: string, index: number, byNic
     transaction.update(orderRef, {
       items: result.items,
       rejectedTotal: result.rejectedTotal,
-      refundDue: order.itemPayment ? result.rejectedTotal : 0,
+      refundDue: order.itemPayment ? refundShare(order, result.rejectedTotal) : 0,
       updatedAt: now,
     });
     if (restock) transaction.update(restock.ref, { quantity: restock.quantity });

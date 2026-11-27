@@ -42,6 +42,144 @@ export async function validateProductMedia(files: File[]): Promise<void> {
   }
 }
 
+/**
+ * A picture you can look around in: scroll the mouse wheel or pinch to zoom, move the mouse to look around (or drag with a
+ * finger), double-tap to zoom in and out, and use the + / - buttons.
+ */
+function ZoomableImage({ src, alt, onZoom }: { src: string; alt: string; onZoom: (zoomed: boolean) => void }) {
+  const tr = useTr();
+  const MAX = 5;
+  const [scale, setScale] = useState(1);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [moving, setMoving] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pointList = (): Array<{ x: number; y: number }> => Array.from(pointers.current.values());
+  const pinch = useRef<{ dist: number; scale: number } | null>(null);
+  const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const lastTap = useRef(0);
+  const scaleRef = useRef(1);
+  const posRef = useRef({ x: 0, y: 0 });
+
+  const apply = (nextScale: number, nextPos: { x: number; y: number }) => {
+    const rect = box.current?.getBoundingClientRect();
+    const limitX = rect ? (rect.width * (nextScale - 1)) / 2 : 0;
+    const limitY = rect ? (rect.height * (nextScale - 1)) / 2 : 0;
+    const clean = { x: Math.max(-limitX, Math.min(limitX, nextPos.x)), y: Math.max(-limitY, Math.min(limitY, nextPos.y)) };
+    scaleRef.current = nextScale;
+    posRef.current = nextScale <= 1 ? { x: 0, y: 0 } : clean;
+    setScale(nextScale);
+    setPos(posRef.current);
+    onZoom(nextScale > 1);
+  };
+
+  /** Zoom to a new level while keeping the point under (cx, cy) in place. */
+  const zoomAt = (nextScale: number, cx?: number, cy?: number) => {
+    const rect = box.current?.getBoundingClientRect();
+    const level = Math.max(1, Math.min(MAX, nextScale));
+    if (!rect || cx === undefined || cy === undefined) { apply(level, posRef.current); return; }
+    const fromCenterX = cx - rect.left - rect.width / 2;
+    const fromCenterY = cy - rect.top - rect.height / 2;
+    const ratio = level / scaleRef.current;
+    apply(level, { x: fromCenterX - ratio * (fromCenterX - posRef.current.x), y: fromCenterY - ratio * (fromCenterY - posRef.current.y) });
+  };
+
+  // The mouse wheel needs a non-passive listener so the page does not scroll while zooming.
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return undefined;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      zoomAt(scaleRef.current * Math.exp(-event.deltaY * 0.0022), event.clientX, event.clientY);
+    };
+    element.addEventListener('wheel', onWheel, { passive: false });
+    return () => element.removeEventListener('wheel', onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (event.pointerType !== 'mouse') (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
+    if (pointers.current.size === 2) {
+      const [a, b] = pointList();
+      pinch.current = { dist: Math.hypot(a.x - b.x, a.y - b.y), scale: scaleRef.current };
+      drag.current = null;
+    } else if (pointers.current.size === 1) {
+      drag.current = { x: event.clientX, y: event.clientY, px: posRef.current.x, py: posRef.current.y };
+      setMoving(true);
+    }
+  };
+
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const rect = box.current?.getBoundingClientRect();
+    if (event.pointerType === 'mouse' && event.buttons === 0) {
+      // Hover: with the picture zoomed in, moving the mouse looks around it.
+      if (rect && scaleRef.current > 1) {
+        const fx = (event.clientX - rect.left) / rect.width - 0.5;
+        const fy = (event.clientY - rect.top) / rect.height - 0.5;
+        apply(scaleRef.current, { x: -fx * rect.width * (scaleRef.current - 1), y: -fy * rect.height * (scaleRef.current - 1) });
+      }
+      return;
+    }
+    if (!pointers.current.has(event.pointerId)) return;
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.current.size === 2 && pinch.current) {
+      const [a, b] = pointList();
+      const distance = Math.hypot(a.x - b.x, a.y - b.y);
+      zoomAt((pinch.current.scale * distance) / pinch.current.dist, (a.x + b.x) / 2, (a.y + b.y) / 2);
+    } else if (drag.current && scaleRef.current > 1) {
+      apply(scaleRef.current, { x: drag.current.px + event.clientX - drag.current.x, y: drag.current.py + event.clientY - drag.current.y });
+    }
+  };
+
+  const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    pointers.current.delete(event.pointerId);
+    if (pointers.current.size < 2) pinch.current = null;
+    if (pointers.current.size === 0) {
+      drag.current = null;
+      setMoving(false);
+      // Double tap or double click: zoom in at that spot, or back out.
+      const now = Date.now();
+      if (now - lastTap.current < 320) {
+        if (scaleRef.current > 1) apply(1, { x: 0, y: 0 });
+        else zoomAt(2.6, event.clientX, event.clientY);
+        lastTap.current = 0;
+      } else {
+        lastTap.current = now;
+      }
+    }
+  };
+
+  const stop = (event: React.SyntheticEvent) => event.stopPropagation();
+  const button = { width: '40px', height: '40px', borderRadius: '50%', border: 0, background: 'rgba(16,29,56,0.85)', color: '#fff', fontSize: '1.2rem', cursor: 'pointer' } as const;
+
+  return (
+    <div
+      ref={box}
+      className="mr-zoombox"
+      style={{ touchAction: scale > 1 ? 'none' : 'pan-y', cursor: scale > 1 ? 'grab' : 'zoom-in' }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onPointerLeave={event => { if (event.pointerType === 'mouse') { pointers.current.delete(event.pointerId); setMoving(false); } }}
+    >
+      <img
+        src={src}
+        alt={alt}
+        draggable={false}
+        style={{ transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`, transition: moving ? 'none' : 'transform 0.12s ease-out' }}
+      />
+      <div className="mr-zoomtools" onClick={stop} onPointerDown={stop} onPointerUp={stop}>
+        <button type="button" style={button} aria-label={tr('Zoom out')} onClick={() => zoomAt(scaleRef.current / 1.5)} disabled={scale <= 1}>−</button>
+        <span style={{ color: '#fff', fontSize: '0.8rem', minWidth: '3rem', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
+        <button type="button" style={button} aria-label={tr('Zoom in')} onClick={() => zoomAt(scaleRef.current * 1.5)} disabled={scale >= MAX}>+</button>
+        {scale > 1 && <button type="button" style={{ ...button, width: 'auto', padding: '0 0.8rem', fontSize: '0.8rem' }} onClick={() => apply(1, { x: 0, y: 0 })}>{tr('Fit')}</button>}
+      </div>
+    </div>
+  );
+}
+
 export function MediaLightbox({
   items,
   startIndex,
@@ -93,7 +231,7 @@ export function MediaLightbox({
 
         <div
           className="mr-fullview-stage"
-          style={{ overflow: zoomed ? 'auto' : 'hidden' }}
+          style={{ overflow: 'hidden' }}
           onTouchStart={event => { touchStart.current = event.touches[0].clientX; }}
           onTouchEnd={event => {
             if (touchStart.current === null || items.length < 2 || zoomed) return;
@@ -104,7 +242,7 @@ export function MediaLightbox({
         >
           {current.type === 'video'
             ? <video src={current.url} controls autoPlay playsInline style={{ maxWidth: '100%', maxHeight: '78dvh' }} />
-            : <img src={current.url} alt={name} style={zoomed ? { maxWidth: 'none', width: '200%', maxHeight: 'none' } : undefined} />}
+            : <ZoomableImage key={current.url} src={current.url} alt={name} onZoom={setZoomed} />}
           {items.length > 1 && !zoomed && (
             <>
               <button type="button" className="mr-fullview-nav" style={{ left: '8px' }} aria-label={tr('Previous')} onClick={() => go(-1)}>‹</button>
@@ -114,8 +252,8 @@ export function MediaLightbox({
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center', padding: '0.5rem 0.8rem' }}>
-          {current.type !== 'video' && <button type="button" className="mr-chip" aria-pressed={zoomed} onClick={() => setZoomed(value => !value)}>{zoomed ? tr('Fit to screen') : tr('Zoom in')}</button>}
           {items.length > 1 && <span style={{ fontSize: '0.8rem', color: '#666' }}>{index + 1} / {items.length} · {tr('swipe or use the arrows')}</span>}
+          {current.type !== 'video' && <span style={{ fontSize: '0.78rem', color: '#777' }}>{tr('Scroll or pinch to zoom, move the mouse to look around, double-tap to zoom.')}</span>}
         </div>
 
         {items.length > 1 && (

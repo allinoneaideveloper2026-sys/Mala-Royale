@@ -73,7 +73,9 @@ export function PaymentProofCapture({
         setTimeStatus(result.timeStatus);
         setPaidAt(result.paidAtIso);
         const paidText = result.paidAtIso ? new Date(result.paidAtIso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-        if (result.paymentStatus === 'failed' || result.paymentStatus === 'pending') {
+        if (result.source === 'server' && !result.utr && result.timeStatus === 'unknown' && result.paymentStatus === 'unknown') {
+          setBlocking('This does not look like a payment confirmation screenshot (no payment reference, time or success message found). Please attach the screenshot your payment app shows after you pay.');
+        } else if (result.paymentStatus === 'failed' || result.paymentStatus === 'pending') {
           setBlocking(`This screenshot shows a payment that is ${result.paymentStatus === 'failed' ? 'not successful' : 'still pending'}. Please wait until the payment succeeds, then attach the final screenshot.`);
         } else if (result.amountStatus === 'mismatch') {
           setBlocking(`This screenshot shows ₹${result.seen.join(', ₹')}, but your order total (after offers) is ₹${expectedAmount}. Please pay exactly ₹${expectedAmount} and attach that screenshot. If you believe this is a mistake, use "Report a problem" on your order or message us.`);

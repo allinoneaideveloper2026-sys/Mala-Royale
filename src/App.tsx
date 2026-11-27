@@ -14,6 +14,9 @@ import { HeartIcon } from './components/storefront/Icons';
 import SiteFooter from './components/storefront/SiteFooter';
 import SitePageView from './components/storefront/SitePageView';
 import SitePagesEditor from './components/host/SitePagesEditor';
+import OfferBanner from './components/storefront/OfferBanner';
+import DiscountRulesEditor from './components/host/DiscountRulesEditor';
+import { benefitText, bestDiscount, nextOffer, type DiscountRule } from './domain/discounts';
 import { DEFAULT_PAGES, fillTokens, type SitePageKey, type SitePages } from './domain/sitePages';
 import { useWishlist } from './app/wishlist';
 import { useSmartSearch } from './app/smartSearch';
@@ -46,7 +49,7 @@ import { withTimeout, getOrderStatus, getOrderStatusStyle, newestFirst } from '.
 import { validateRefundDetails } from './domain/refund';
 import UpiPayBox from './components/checkout/UpiPayBox';
 import ConfirmDialog, { type DialogResult, type DialogReason } from './components/host/ConfirmDialog';
-import { savePopular, subscribePopular, saveSitePages, subscribeSitePages, deleteKuchu, publishKuchu, refreshKuchuFresh, rejectCloudOrderItem, subscribeKuchu, updateKuchu } from './domain/firestoreStore';
+import { saveDiscounts, subscribeDiscounts, savePopular, subscribePopular, saveSitePages, subscribeSitePages, deleteKuchu, publishKuchu, refreshKuchuFresh, rejectCloudOrderItem, subscribeKuchu, updateKuchu } from './domain/firestoreStore';
 import KuchuManager from './components/host/KuchuManager';
 import { FINAL_SALE_HEADLINE, choiceKey, compatibleKuchu, itemCodeWithKuchu, lineKey, lineUnitPrice, lineRegularPrice } from './domain/kuchu';
 import { deleteHostRecord, deleteOrderForever, getMyHostRecord, logAudit, restoreOrder, saveHostRecord, setHostActive, softDeleteOrder, subscribeAuditLog, subscribeHostRecords, validateHostRecord } from './domain/adminStore';
@@ -134,6 +137,7 @@ export default function App() {
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const recent = useRecentlyViewed();
   const [popularList, setPopularList] = useState<string[]>([]);
+  const [discountRules, setDiscountRules] = useState<DiscountRule[]>([]);
   const [statsOn, setStatsOn] = useState(statsEnabled());
   const [descriptionBusy, setDescriptionBusy] = useState(false);
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
@@ -398,6 +402,12 @@ export default function App() {
     window.addEventListener('hashchange', open);
     return () => window.removeEventListener('hashchange', open);
   }, []);
+
+  // Offers: customers read them (cached for 2 minutes); staff see changes live.
+  useEffect(() => {
+    if (!firebaseConfigured) return;
+    return subscribeDiscounts(setDiscountRules, () => undefined, { live: isStaff });
+  }, [isStaff]);
 
   // "Popular right now": the host publishes it; customers read it (cached).
   useEffect(() => {
@@ -1225,6 +1235,15 @@ export default function App() {
     }
   };
 
+  const handleSaveDiscounts = async (rules: DiscountRule[]) => {
+    if (!(await askAccept('Save the offers?', 'Switched-on offers show in the shop banner and are applied to customers\' bags straight away.', 'Save offers'))) return;
+    if (firebaseConfigured) {
+      await withTimeout(saveDiscounts(rules), 30000, 'Saving is taking too long. Check your internet connection and try again.');
+      audit('OFFERS_CHANGED', 'settings', 'discounts', `${rules.filter(rule => rule.active).length} of ${rules.length} offers switched on`);
+    }
+    setDiscountRules(rules);
+  };
+
   const handleSaveShipping = async () => {
     const prefixes = parsePrefixes(prefixDraft);
     if (shippingConfig.ruleBEnabled && prefixes.length === 0) {
@@ -1471,6 +1490,11 @@ export default function App() {
   const cartCount = cart.reduce((count, line) => count + line.quantity, 0);
   const cartTotal = cart.reduce((sum, line) => sum + lineUnitPrice(line.product, line.kuchu) * line.quantity, 0);
   const cartHasKuchu = cart.some(line => Boolean(line.kuchu));
+  // The host's offers: the best live one that fits this bag is taken off automatically.
+  const discountApplied = bestDiscount(cartTotal, discountRules, Date.now());
+  const discountAmount = discountApplied ? discountApplied.amount : 0;
+  const payableTotal = cartTotal - discountAmount;
+  const offerNudge = nextOffer(cartTotal, discountRules, Date.now());
 
   // Customer Action: Submit Order via OrderBook Engine
   // Which courier rule applies to the order being placed (checked again by the host).
@@ -1567,7 +1591,7 @@ export default function App() {
         ? await createCloudOrder(
           customerUid,
           orderItems,
-          cartTotal,
+          payableTotal,
           deliveryAddress,
           courierPolicyAccepted,
           utr.trim(),
@@ -1577,17 +1601,18 @@ export default function App() {
           courierDecision,
           cartHasKuchu ? new Date().toISOString() : undefined,
           newConsent({ email: contactEmail, whatsapp: address.phone, consentEmail, consentWhatsapp, consentPromos }, new Date().toISOString()),
+          discountApplied || undefined,
         )
         : globalOrderBook.createOrder(
           userEmail,
           orderItems,
-          cartTotal,
+          payableTotal,
           deliveryAddress,
           courierPolicyAccepted
         );
 
       if (!firebaseConfigured) {
-        globalOrderBook.submitItemPayment(order.orderId, cartTotal, utr.trim(), proofUrl);
+        globalOrderBook.submitItemPayment(order.orderId, payableTotal, utr.trim(), proofUrl);
         setActiveOrders(globalOrderBook.getAllOrders());
       }
       if (firebaseConfigured) {
@@ -1629,7 +1654,7 @@ export default function App() {
       setOrderCopied(false);
       setExpandedOrders({ [order.orderId]: true });
       notifyCustomer(order.orderId, 'ORDER_PLACED');
-      setPlacedOrder({ orderId: order.orderId, total: cartTotal, phone: deliveryAddress.phone, name: deliveryAddress.fullName });
+      setPlacedOrder({ orderId: order.orderId, total: payableTotal, phone: deliveryAddress.phone, name: deliveryAddress.fullName });
     } catch (err: any) {
       const message = err instanceof Error && err.message.includes('permission-denied')
         ? 'Firestore rejected this action. Check the deployed Firestore rules and signed-in account role.'
@@ -2038,6 +2063,7 @@ export default function App() {
         shopping={!isStaff}
         tr={tr}
       />
+      {!isStaff && customerTab === 'SHOP' && <OfferBanner rules={discountRules} onShop={scrollToCatalog} tr={tr} />}
       {!isStaff && customerTab === 'SHOP' && <HeroBanner tr={tr} onShop={scrollToCatalog} />}
 
       {!isStaff && (
@@ -2336,6 +2362,8 @@ export default function App() {
               <button type="button" onClick={() => void handleSaveShipping()} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.6rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save courier rules</button>
             </div>
 
+            <DiscountRulesEditor key={JSON.stringify(discountRules)} rules={discountRules} onSave={handleSaveDiscounts} />
+
             </>)}
             {hostTab === 'ENQUIRIES' && (<>
             {/* Customer enquiries */}
@@ -2498,7 +2526,7 @@ export default function App() {
                   </div>
                   <OrderLines items={ord.items} onRejectItem={hostOrderTab === 'ACTIVE' && activeLines(ord).length > 1 ? index => void handleRejectItem(ord, index) : undefined} />
                   <p style={{ margin: '0.4rem 0', fontWeight: 'bold' }}>
-                    Items total: ₹{acceptedTotal(ord)}
+                    Items total: ₹{acceptedTotal(ord)}{ord.discount && <span style={{ color: '#1b7a3a', fontWeight: 400 }}> (offer {ord.discount.name}: −₹{ord.discount.amount} from ₹{ord.subtotal})</span>}
                     {(ord.rejectedTotal || 0) > 0 && <span style={{ color: '#8b1e2d', fontWeight: 'normal' }}> (₹{ord.rejectedTotal} rejected; originally ₹{ord.itemTotal}{ord.refundDue ? `, refund ₹${ord.refundDue}${ord.refundDetails ? ` to ${describeRefund(ord)}` : ' - waiting for the customer to send refund details'}` : ''})</span>}
                   </p>
                   <Suspense fallback={<LazyFallback />}><ParcelSheet key={`${ord.orderId}-${ord.parcelDetails?.savedAt || 'new'}`} order={ord} onSave={handleSaveParcel} /></Suspense>
@@ -2823,9 +2851,20 @@ export default function App() {
                           <span>{tr('Items ({count})', { count: cartCount })}</span>
                           <span>₹{cartTotal}</span>
                         </div>
+                        {discountApplied && (
+                          <div role="status" style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', marginTop: '0.4rem', color: '#1b7a3a', fontWeight: 700 }}>
+                            <span>🎉 {discountApplied.name}</span>
+                            <span>−₹{discountAmount}</span>
+                          </div>
+                        )}
+                        {offerNudge && (
+                          <div role="status" style={{ marginTop: '0.5rem', padding: '0.5rem 0.7rem', background: 'var(--mr-tint)', border: '1px dashed var(--mr-gold)', borderRadius: '8px', fontSize: '0.85rem' }}>
+                            ✨ {tr('Add')} <strong>₹{offerNudge.shortBy}</strong> {tr('more to get')} <strong>{benefitText(offerNudge.rule)}</strong>
+                          </div>
+                        )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', marginTop: '0.4rem', fontWeight: 'bold', fontSize: '1.1rem' }}>
                           <span>{tr('Order total')}</span>
-                          <span style={{ color: 'var(--mr-primary)' }}>₹{cartTotal}</span>
+                          <span style={{ color: 'var(--mr-primary)' }}>₹{payableTotal}</span>
                         </div>
                         <p style={{ color: '#666', fontSize: '0.8rem', marginBottom: 0 }}>{tr('Courier charges are billed separately after your order is confirmed.')}</p>
                         {unavailableLines.length > 0 && (
@@ -2864,9 +2903,15 @@ export default function App() {
                         <span>₹{lineUnitPrice(line.product, line.kuchu) * line.quantity}</span>
                       </div>
                     ))}
+                    {discountApplied && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.5rem', color: '#1b7a3a', fontWeight: 700 }}>
+                        <span>🎉 {discountApplied.name}</span>
+                        <span>−₹{discountAmount}</span>
+                      </div>
+                    )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.5rem', fontWeight: 'bold' }}>
                       <span>{tr('Order total')}</span>
-                      <span>₹{cartTotal}</span>
+                      <span>₹{payableTotal}</span>
                     </div>
                     <button type="button" onClick={() => { setIsCheckoutOpen(false); setIsCartOpen(true); }} style={{ marginTop: '0.5rem', padding: '0.35rem 0.7rem', cursor: 'pointer' }}>{tr('Edit cart')}</button>
                   </div>
@@ -2923,17 +2968,18 @@ export default function App() {
                       )}
                       <p style={{ color: '#666', fontSize: '0.8rem' }}>{tr('Delivery address only. The host will confirm courier serviceability before accepting payment.')}</p>
                       <button
-                        onClick={() => setCheckoutStep(2)}
-                        disabled={!address.pincodeCheck || ['NOT_FOUND', 'NOT_SERVICEABLE'].includes(address.pincodeCheck.status) || (useSavedAddress ? !selectedAddressId : !isAddressComplete(address))}
+                        onClick={() => { if (!courierPolicyAccepted) { alert(tr('Please tick "I understand and accept the courier policy" to continue.')); return; } setCheckoutStep(2); }}
+                        disabled={!courierPolicyAccepted || !address.pincodeCheck || ['NOT_FOUND', 'NOT_SERVICEABLE'].includes(address.pincodeCheck.status) || (useSavedAddress ? !selectedAddressId : !isAddressComplete(address))}
                         style={{ marginTop: '1.2rem', backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}
                       >{tr('Next: Item Payment')}</button>
+                  {!courierPolicyAccepted && <p role="status" style={{ margin: '0.4rem 0 0', fontSize: '0.82rem', color: '#8a4b08' }}>{tr('Please tick "I understand and accept the courier policy" above to continue.')}</p>}
                     </div>
                   )}
 
                   {/* Step 2: Payment */}
                   {checkoutStep === 2 && (
                     <form onSubmit={handlePlaceOrder}>
-                      <h3>{t.step2Payment} (₹{cartTotal})</h3>
+                      <h3>{t.step2Payment} (₹{payableTotal})</h3>
                       {firebaseConfigured && !googleUser && (
                         <div style={{ backgroundColor: '#f1f8ff', border: '1px solid #cfe3f7', padding: '0.8rem', borderRadius: '6px', margin: '0.6rem 0', fontSize: '0.85rem' }}>
                           <strong>{tr('No account needed.')}</strong> {tr(address.phone ? 'The host will confirm your order on WhatsApp at {phone}. Sign in with Google (optional) to keep track of your orders on any device.' : 'The host will confirm your order on WhatsApp. Sign in with Google (optional) to keep track of your orders on any device.', { phone: address.phone })}
@@ -2944,7 +2990,7 @@ export default function App() {
                       )}
                       <div style={{ backgroundColor: 'var(--mr-tint)', padding: '1rem', borderRadius: '6px', margin: '0.8rem 0' }}>
                         <p style={{ marginTop: 0, fontSize: '0.9rem' }}>{tr('Scan the payment QR provided by the host, pay, then attach the screenshot from your payment app. We will read the 12-digit UTR from it for you to check.')}</p>
-                        <UpiPayBox upiId={upiId} payeeName={payeeName} amount={cartTotal} note="Mala Royale order" fallbackQrUrl={paymentQrUrl} tr={tr} />
+                        <UpiPayBox upiId={upiId} payeeName={payeeName} amount={payableTotal} note="Mala Royale order" fallbackQrUrl={paymentQrUrl} tr={tr} />
                       </div>
                       <fieldset style={{ margin: '0.6rem 0', padding: '0.7rem', border: '1px solid #ddd', borderRadius: '8px', display: 'grid', gap: '0.45rem', fontSize: '0.88rem' }}>
                         <legend style={{ fontWeight: 'bold', padding: '0 0.3rem' }}>{tr('Order updates (optional)')}</legend>
@@ -2963,8 +3009,8 @@ export default function App() {
                         </label>
                         <small style={{ color: '#666' }}>{tr('We use these only for your order and, if you ticked it, offers. You can ask us to stop at any time.')}</small>
                       </fieldset>
-                      <PaymentProofCapture file={paymentProof} onFile={setPaymentProof} utr={utr} onUtr={setUtr} expectedAmount={cartTotal} onCheck={setProofCheck} label={tr('Payment screenshot (PhonePe, GPay, Paytm or bank app)')} />
-                      <button type="submit" disabled={firebaseLoading || uploadingProof} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}>{uploadingProof ? tr('Uploading screenshot...') : t.placeOrder}</button>
+                      <PaymentProofCapture file={paymentProof} onFile={setPaymentProof} utr={utr} onUtr={setUtr} expectedAmount={payableTotal} onCheck={setProofCheck} label={tr('Payment screenshot (PhonePe, GPay, Paytm or bank app)')} />
+                      <button type="submit" disabled={firebaseLoading || uploadingProof || !courierPolicyAccepted || Boolean(proofCheck?.blocking)} style={{ backgroundColor: 'var(--mr-primary)', color: '#fff', border: 'none', padding: '0.7rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', width: '100%' }}>{uploadingProof ? tr('Uploading screenshot...') : t.placeOrder}</button>
                       {cartHasKuchu && <p style={{ margin: '0.5rem 0 0', fontSize: '0.72rem', color: '#6b7280', textAlign: 'center' }}>{tr(FINAL_SALE_HEADLINE)}</p>}
                     </form>
                   )}
@@ -3031,7 +3077,7 @@ export default function App() {
                     )}
                     <OrderLines items={ord.items} />
                     {ord.itemPayment && <div style={{ margin: '0.4rem 0' }}><PaymentProofView url={ord.itemPayment.screenshotUrl} caption={tr('Your payment screenshot')} /></div>}
-                    <p style={{ margin: '0.4rem 0', fontWeight: 'bold' }}>{tr('Order total: ₹')}{acceptedTotal(ord)}{(ord.rejectedTotal || 0) > 0 && <span style={{ color: '#8b1e2d', fontWeight: 'normal' }}> ({tr('₹')}{ord.rejectedTotal} {tr('of your items were rejected; originally ₹')}{ord.itemTotal})</span>}</p>
+                    <p style={{ margin: '0.4rem 0', fontWeight: 'bold' }}>{tr('Order total: ₹')}{acceptedTotal(ord)}{ord.discount && <span style={{ color: '#1b7a3a', fontWeight: 400 }}> ({ord.discount.name}: −₹{ord.discount.amount})</span>}{(ord.rejectedTotal || 0) > 0 && <span style={{ color: '#8b1e2d', fontWeight: 'normal' }}> ({tr('₹')}{ord.rejectedTotal} {tr('of your items were rejected; originally ₹')}{ord.itemTotal})</span>}</p>
                     <p style={{ margin: '0.4rem 0', color: '#666', fontSize: '0.85rem' }}>{tr('Last updated')} {new Date(ord.updatedAt).toLocaleString()}</p>
                     <div style={{ margin: '0.7rem 0', padding: '0.75rem', backgroundColor: 'var(--mr-tint)', borderRadius: '6px' }}>
                       <strong>{tr('Delivery address submitted')}</strong>
