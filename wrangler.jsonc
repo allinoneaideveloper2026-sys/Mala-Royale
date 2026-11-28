@@ -1,6 +1,6 @@
 {
   // Cloudflare config: the website files in ./dist plus a small Worker (worker/index.ts) that handles /api/* requests.
-  "name": "mala-royale-optimized",
+  "name": "mala-royale",
   "main": "worker/index.ts",
   "compatibility_date": "2026-11-01",
   "assets": {
